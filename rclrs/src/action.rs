@@ -48,6 +48,7 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
+    rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     _marker: PhantomData<T>,
 }
 
@@ -60,9 +61,53 @@ where
     where
         T: rosidl_runtime_rs::Action,
     {
+        // SAFETY: Getting a zero-initialized value is always safe.
+        let mut rcl_action_server = unsafe { rcl_get_zero_initialized_subscription() };
+        let type_support_ptr =
+            <T as Message>::RmwMsg::get_type_support() as *const rosidl_message_type_support_t;
+        let topic_c_string = CString::new(topic).map_err(|err| RclrsError::StringContainsNul {
+            err,
+            s: topic.into(),
+        })?;
+
+        // SAFETY: No preconditions for this function.
+        let mut action_server_options = unsafe { rcl_action_server_get_default_options() };
+        action_server_options.qos = qos.into();
+        unsafe {
+            // SAFETY: The rcl_publisher is zero-initialized as expected by this function.
+            // The rcl_node is kept alive because it is co-owned by the subscription.
+            // The topic name and the options are copied by this function, so they can be dropped
+            // afterwards.
+            // TODO: type support?
+            rcl_action_server_init(
+                &mut rcl_action_server,
+                &*rcl_node_mtx.lock().unwrap(),
+                type_support_ptr,
+                topic_c_string.as_ptr(),
+                &action_server_options,
+            )
+                .ok()?;
+        }
         Ok(Self {
+            rcl_action_server_mtx: Mutex::new(rcl_action_server),
             _marker: Default::default(),
         })
+    }
+
+    pub fn publish_feedback<'a, M: MessageCow<'a, T>>(&self, message: M) -> Result<(), RclrsError> {
+        let rmw_message = T::into_rmw_message(message.into_cow());
+        let rcl_action_server = &mut *self.rcl_action_server_mtx.lock().unwrap();
+        unsafe {
+            // SAFETY: The message type is guaranteed to match the publisher type by the type system.
+            // The message does not need to be valid beyond the duration of this function call.
+            // The third argument is explictly allowed to be NULL.
+            rcl_publish_feedback(
+                rcl_action_server,
+                rmw_message.as_ref() as *const <T as Message>::RmwMsg as *mut _,
+                std::ptr::null_mut(),
+            )
+                .ok()
+        }
     }
 }
 
@@ -86,6 +131,17 @@ where
             _marker: Default::default(),
         }
     }
+
+    pub fn publish_feedback(&self, feedback: &T::Feedback) -> () {
+        let feedback_copy = feedback.clone();
+        unsafe {
+            rcl_action_publish_feedback(
+
+            )
+        }
+    }
+
+    pub fn get_goal(&self) -> Arc<T> { self.goal_request }
 
     pub fn is_canceling(&self) -> bool {
         false
