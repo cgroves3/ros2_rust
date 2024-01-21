@@ -14,7 +14,6 @@
 
 import os
 import pathlib
-import subprocess
 
 from pathlib import Path
 
@@ -30,7 +29,6 @@ from rosidl_parser.definition import AbstractString
 from rosidl_parser.definition import AbstractWString
 from rosidl_parser.definition import Action
 from rosidl_parser.definition import Array
-from rosidl_parser.definition import BASIC_TYPES
 from rosidl_parser.definition import BasicType
 from rosidl_parser.definition import BoundedSequence
 from rosidl_parser.definition import BoundedString
@@ -242,6 +240,7 @@ def primitive_value_to_rs(type_, value):
     if type_.type in [
             'byte',
             'char',
+            'wchar',
             'int8',
             'uint8',
             'int16',
@@ -334,6 +333,8 @@ def make_get_rmw_rs_type(package_name):
                 return 'u8'
             elif type_.typename == 'char':
                 return 'u8'
+            elif type_.typename == 'wchar':
+                return 'u16'
             elif type_.typename == 'float':
                 return 'f32'
             elif type_.typename == 'double':
