@@ -44,11 +44,39 @@ where
     }
 }
 
+
+/// Internal struct used by subscriptions.
+pub struct ActionServerHandle {
+    rcl_action_server_mtx: Mutex<rcl_action_server_t>,
+    rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
+    pub(crate) in_use_by_wait_set: Arc<AtomicBool>,
+}
+
+impl ActionServerHandle {
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_server_t> {
+        self.rcl_action_server_mtx.lock().unwrap()
+    }
+}
+
+impl Drop for ActionServerHandle {
+    fn drop(&mut self) {
+        let rcl_action_server = self.rcl_action_server_mtx.get_mut().unwrap();
+        let rcl_node = &mut *self.rcl_node_mtx.lock().unwrap();
+        // SAFETY: No preconditions for this function (besides the arguments being valid).
+        unsafe {
+            rcl_action_server_fini(rcl_action_server, rcl_node);
+        }
+    }
+}
+
 pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    rcl_action_server_mtx: Mutex<rcl_action_server_t>,
+    pub(crate) handle: Arc<ActionServerHandle>,
+    handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+    handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
+    handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
     _marker: PhantomData<T>,
 }
 
@@ -57,7 +85,13 @@ where
     T: rosidl_runtime_rs::Action,
 {
     /// Creates a new action server.
-    pub(crate) fn new(rcl_node_mtx: Arc<Mutex<rcl_node_t>>, topic: &str) -> Result<Self, RclrsError>
+    pub(crate) fn new(
+        rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
+        topic: &str,
+        handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
+        handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+    ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
     {
@@ -74,7 +108,7 @@ where
         let mut action_server_options = unsafe { rcl_action_server_get_default_options() };
         action_server_options.qos = qos.into();
         unsafe {
-            // SAFETY: The rcl_publisher is zero-initialized as expected by this function.
+            // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
             // The rcl_node is kept alive because it is co-owned by the subscription.
             // The topic name and the options are copied by this function, so they can be dropped
             // afterwards.
@@ -88,20 +122,30 @@ where
             )
                 .ok()?;
         }
-        Ok(Self {
+
+        let handle = Arc::new(ActionServerHandle{
             rcl_action_server_mtx: Mutex::new(rcl_action_server),
+            rcl_node_mtx,
+            in_use_by_wait_set: Arc::new(AtomicBool::new(false))
+        });
+
+        Ok(Self {
+            handle,
+            handle_goal_cb,
+            handle_cancel_cb,
+            handle_accepted_cb,
             _marker: Default::default(),
         })
     }
 
     pub fn publish_feedback<'a, M: MessageCow<'a, T>>(&self, message: M) -> Result<(), RclrsError> {
         let rmw_message = T::into_rmw_message(message.into_cow());
-        let rcl_action_server = &mut *self.rcl_action_server_mtx.lock().unwrap();
+        let rcl_action_server = &mut *self.handle.lock();
         unsafe {
             // SAFETY: The message type is guaranteed to match the publisher type by the type system.
             // The message does not need to be valid beyond the duration of this function call.
             // The third argument is explictly allowed to be NULL.
-            rcl_publish_feedback(
+            rcl_acttion_publish_feedback(
                 rcl_action_server,
                 rmw_message.as_ref() as *const <T as Message>::RmwMsg as *mut _,
                 std::ptr::null_mut(),
@@ -110,6 +154,26 @@ where
         }
     }
 }
+
+/// Trait to be implemented by concrete Action Server structs.
+///
+/// See [`ActionServer<T>`] for an example
+pub trait ActionServerBase: Send + Sync {
+    /// Internal function to get a reference to the `rcl` handle.
+    fn handle(&self) -> &ActionServerHandle;
+    /// Tries to take a new request and run the callback with it.
+    fn execute(&self) -> Result<(), RclrsError>;
+}
+
+impl<T> ActionServerBase for ActionServer<T> {
+    fn handle(&self) -> &ActionServerHandle {
+        todo!()
+    }
+    fn execute(&self) -> Result<(), RclrsError> {
+        todo!()
+    }
+}
+
 
 pub struct ServerGoalHandle<T>
 where

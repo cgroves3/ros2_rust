@@ -16,7 +16,7 @@ use crate::{
     ActionClient, ActionServer, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
     GoalUUID, GuardCondition, ParameterBuilder, ParameterInterface, ParameterVariant, Parameters,
     Publisher, QoSProfile, RclrsError, ServerGoalHandle, Service, ServiceBase, Subscription,
-    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult,
+    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult, Waitables
 };
 
 impl Drop for rcl_node_t {
@@ -72,6 +72,7 @@ pub struct Node {
     pub(crate) guard_conditions_mtx: Mutex<Vec<Weak<GuardCondition>>>,
     pub(crate) services_mtx: Mutex<Vec<Weak<dyn ServiceBase>>>,
     pub(crate) subscriptions_mtx: Mutex<Vec<Weak<dyn SubscriptionBase>>>,
+    pub(crate) servers_mtx: Mutex<Vec<Weak<dyn ActionServer>>>,
     time_source: TimeSource,
     parameter: ParameterInterface,
 }

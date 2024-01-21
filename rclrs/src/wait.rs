@@ -21,7 +21,7 @@ use std::vec::Vec;
 
 use crate::error::{to_rclrs_result, RclReturnCode, RclrsError, ToResult};
 use crate::rcl_bindings::*;
-use crate::{ClientBase, Context, Node, ServiceBase, SubscriptionBase};
+use crate::{ActionServerBase, ClientBase, Context, Node, ServiceBase, SubscriptionBase};
 
 mod exclusivity_guard;
 mod guard_condition;
@@ -41,6 +41,7 @@ pub struct WaitSet {
     // The guard conditions that are currently registered in the wait set.
     guard_conditions: Vec<ExclusivityGuard<Arc<GuardCondition>>>,
     services: Vec<ExclusivityGuard<Arc<dyn ServiceBase>>>,
+    servers: Vec<ExclusivityGuard<Arc<dyn ActionServerBase>>>,
 }
 
 /// A list of entities that are ready, returned by [`WaitSet::wait`].
@@ -53,6 +54,8 @@ pub struct ReadyEntities {
     pub guard_conditions: Vec<Arc<GuardCondition>>,
     /// A list of services that have potentially received requests.
     pub services: Vec<Arc<dyn ServiceBase>>,
+    /// A list of servers that have potentially received requests.
+    pub servers: Vec<Arc<dyn ActionServerBase>>,
 }
 
 impl Drop for rcl_wait_set_t {
@@ -114,6 +117,7 @@ impl WaitSet {
             guard_conditions: Vec::new(),
             clients: Vec::new(),
             services: Vec::new(),
+            servers: Vec::new()
         })
     }
 
@@ -352,6 +356,7 @@ impl WaitSet {
             clients: Vec::new(),
             guard_conditions: Vec::new(),
             services: Vec::new(),
+            servers: Vec::new()
         };
         for (i, subscription) in self.subscriptions.iter().enumerate() {
             // SAFETY: The `subscriptions` entry is an array of pointers, and this dereferencing is
@@ -394,6 +399,16 @@ impl WaitSet {
             let wait_set_entry = unsafe { *self.rcl_wait_set.services.add(i) };
             if !wait_set_entry.is_null() {
                 ready_entities.services.push(Arc::clone(&service.waitable));
+            }
+        }
+
+        for (i, server) in self.servers.iter().enumerate() {
+            // SAFETY: The `services` entry is an array of pointers, and this dereferencing is
+            // equivalent to
+            // https://github.com/ros2/rcl/blob/35a31b00a12f259d492bf53c0701003bd7f1745c/rcl/include/rcl/wait.h#L419
+            let wait_set_entry = unsafe { *self.rcl_wait_set.waitables.add(i) };
+            if !wait_set_entry.is_null() {
+                ready_entities.servers.push(Arc::clone(&server.waitable));
             }
         }
         Ok(ready_entities)
