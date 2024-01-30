@@ -45,7 +45,7 @@ where
 }
 
 
-/// Internal struct used by subscriptions.
+/// Internal struct used by action servers.
 pub struct ActionServerHandle {
     rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
@@ -151,6 +151,24 @@ where
                 std::ptr::null_mut(),
             )
                 .ok()
+        }
+    }
+
+    pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
+        let mut request_id_out = rmw_request_id_t {
+            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            sequence_number: 0,
+        };
+        type RmwMsg<T> =
+        <<T as rosidl_runtime_rs::Action>::Goal as rosidl_runtime_rs::Message>::RmwMsg;
+        let mut request_out = RmwMsg::<T>::default();
+        let handle = &*self.handle.lock();
+        unsafe {
+            rcl_action_take_goal_request(
+                handle,
+                request_id_out,
+                request_out
+            )
         }
     }
 }
