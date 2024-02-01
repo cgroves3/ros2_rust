@@ -1,5 +1,6 @@
 use crate::{rcl_bindings::*, RclrsError};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::collections::HashMap;
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
@@ -73,6 +74,7 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
+    pub(crate) goals: HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
@@ -130,6 +132,7 @@ where
         });
 
         Ok(Self {
+            goals: HashMap::new(),
             handle,
             handle_goal_cb,
             handle_cancel_cb,
@@ -154,22 +157,61 @@ where
         }
     }
 
-    pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
+    pub fn take_goal_request(&self) -> Result<(T::Impl::SendGoalService::Request, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             sequence_number: 0,
         };
         type RmwMsg<T> =
-        <<T as rosidl_runtime_rs::Action>::Goal as rosidl_runtime_rs::Message>::RmwMsg;
+        <<T as rosidl_runtime_rs::Action>::Impl::SendGoalService::Request as rosidl_runtime_rs::Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_goal_request(
                 handle,
-                request_id_out,
-                request_out
-            )
+                &mut request_id_out,
+                &mut request_out as *mut RmwMsg<T> as *mut _,
+            ).ok()?
         }
+        Ok((T::Impl::SendGoalService::Request::from_rmw_message_info(&message_info) , request_id_out));
+    }
+
+    pub fn take_result_request(&self) -> Result<(T::Impl::GetResultService::Request, rmw_request_id_t), RclrsError> {
+        let mut request_id_out = rmw_request_id_t {
+            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            sequence_number: 0,
+        };
+        type RmwMsg<T> =
+        <<T as rosidl_runtime_rs::Action>::Impl::GetResultService::Request as rosidl_runtime_rs::Message>::RmwMsg;
+        let mut request_out = RmwMsg::<T>::default();
+        let handle = &*self.handle.lock();
+        unsafe {
+            rcl_action_take_result_request(
+                handle,
+                &mut request_id_out,
+                &mut request_out as *mut RmwMsg<T> as *mut _,
+            ).ok()?
+        }
+        Ok((T::Impl::GetResultService::Request::from_rmw_message_info(&message_info) , request_id_out));
+    }
+
+    pub fn take_cancel_request(&self) -> Result<(action_msgs::srv::CancelGoal::Request, rmw_request_id_t), RclrsError> {
+        let mut request_id_out = rmw_request_id_t {
+            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            sequence_number: 0,
+        };
+        type RmwMsg<T> =
+        <action_msgs::srv::CancelGoal::Request as rosidl_runtime_rs::Message>::RmwMsg;
+        let mut request_out = RmwMsg::<T>::default();
+        let handle = &*self.handle.lock();
+        unsafe {
+            rcl_action_take_cancel_request(
+                handle,
+                &mut request_id_out,
+                &mut request_out as *mut RmwMsg<T> as *mut _,
+            ).ok()?
+        }
+        Ok((action_msgs::srv::CancelGoal::Request::from_rmw_message_info(&message_info) , request_id_out));
     }
 }
 
