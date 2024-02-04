@@ -72,7 +72,7 @@ pub struct Node {
     pub(crate) guard_conditions_mtx: Mutex<Vec<Weak<GuardCondition>>>,
     pub(crate) services_mtx: Mutex<Vec<Weak<dyn ServiceBase>>>,
     pub(crate) subscriptions_mtx: Mutex<Vec<Weak<dyn SubscriptionBase>>>,
-    pub(crate) servers_mtx: Mutex<Vec<Weak<dyn ActionServer>>>,
+    pub(crate) servers_mtx: Mutex<Vec<Weak<dyn ActionServerBase>>>,
     time_source: TimeSource,
     parameter: ParameterInterface,
 }
@@ -235,8 +235,8 @@ impl Node {
             Arc::clone(&self.rcl_node_mtx),
             topic,
         )?);
-        // self.servers
-        //     .push(Arc::downgrade(&server) as Weak<dyn ClientBase>);
+        { self.servers_mtx.lock().unwrap() }
+            .push(Arc::downgrade(&server) as Weak<dyn ActionServer>);
         Ok(action_server)
     }
 
@@ -373,6 +373,13 @@ impl Node {
 
     pub(crate) fn live_services(&self) -> Vec<Arc<dyn ServiceBase>> {
         { self.services_mtx.lock().unwrap() }
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    }
+
+    pub(crate) fn live_servers(&self) -> Vec<Arc<dyn ActionServerBase>> {
+        { self.servers_mtx.lock().unwrap() }
             .iter()
             .filter_map(Weak::upgrade)
             .collect()

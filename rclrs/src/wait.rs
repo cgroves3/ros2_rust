@@ -58,6 +58,13 @@ pub struct ReadyEntities {
     pub servers: Vec<Arc<dyn ActionServerBase>>,
 }
 
+pub struct ServerEntities {
+    pub goal_request_ready: bool,
+    pub cancel_request_ready: bool,
+    pub result_request_ready: bool,
+    pub goal_expired: bool,
+}
+
 impl Drop for rcl_wait_set_t {
     fn drop(&mut self) {
         // SAFETY: No preconditions for this function (besides passing in a valid wait set).
@@ -129,6 +136,7 @@ impl WaitSet {
         let live_clients = node.live_clients();
         let live_guard_conditions = node.live_guard_conditions();
         let live_services = node.live_services();
+        let live_servers = node.live_servers();
         let ctx = Context {
             rcl_context_mtx: node.rcl_context_mtx.clone(),
         };
@@ -157,6 +165,10 @@ impl WaitSet {
         for live_service in &live_services {
             wait_set.add_service(live_service.clone())?;
         }
+
+        for live_server in &live_servers {
+            wait_set.add_server(live_server.clone())?;
+        }
         Ok(wait_set)
     }
 
@@ -169,6 +181,7 @@ impl WaitSet {
         self.guard_conditions.clear();
         self.clients.clear();
         self.services.clear();
+        self.servers.clear();
         // This cannot fail – the rcl_wait_set_clear function only checks that the input handle is
         // valid, which it always is in our case. Hence, only debug_assert instead of returning
         // Result.
@@ -302,6 +315,61 @@ impl WaitSet {
         Ok(())
     }
 
+    /// Adds a service to the wait set.
+    ///
+    /// # Errors
+    /// - If the service was already added to this wait set or another one,
+    ///   [`AlreadyAddedToWaitSet`][1] will be returned
+    /// - If the number of services in the wait set is larger than the
+    ///   capacity set in [`WaitSet::new`], [`WaitSetFull`][2] will be returned
+    ///
+    /// [1]: crate::RclrsError
+    /// [2]: crate::RclReturnCode
+    pub fn add_server(&mut self, server: Arc<dyn ActionServerBase>) -> Result<(), RclrsError> {
+        let exclusive_service = ExclusivityGuard::new(
+            Arc::clone(&server),
+            Arc::clone(&server.handle().in_use_by_wait_set),
+        )?;
+        unsafe {
+            // SAFETY: I'm not sure if it's required, but the service pointer will remain valid
+            // for as long as the wait set exists, because it's stored in self.services.
+            // Passing in a null pointer for the third argument is explicitly allowed.
+            rcl_action_wait_set_add_action_server(
+                &mut self.rcl_wait_set,
+                &*server.handle().lock() as *const _,
+                core::ptr::null_mut(),
+            )
+        }
+        .ok()?;
+        self.servers.push(exclusive_service);
+        Ok(())
+    }
+
+    fn get_server_entities_ready(&mut self, server: Arc<dyn ActionServerBase>) -> Result<ServerEntities, RclrsError> {
+        let goal_request_ready = false;
+        let cancel_request_ready = false;
+        let result_request_ready = false;
+        let goal_expired = false;
+
+        unsafe {
+            rcl_action_server_wait_set_get_entities_ready(
+                &mut self.rcl_wait_set,
+                &*server.handle().lock() as *const _,
+                &goal_request_ready,
+                &cancel_request_ready,
+                &result_request_ready,
+                &goal_expired
+            );
+        }
+        .ok()?;
+        Ok(ServerEntities::new(
+            goal_request_ready,
+            cancel_request_ready,
+            result_request_ready,
+            goal_expired
+        ));
+    }
+
     /// Blocks until the wait set is ready, or until the timeout has been exceeded.
     ///
     /// If the timeout is `None` then this function will block indefinitely until
@@ -403,11 +471,19 @@ impl WaitSet {
         }
 
         for (i, server) in self.servers.iter().enumerate() {
-            // SAFETY: The `services` entry is an array of pointers, and this dereferencing is
+            // SAFETY: The `servers` entry is an array of pointers, and this dereferencing is
             // equivalent to
             // https://github.com/ros2/rcl/blob/35a31b00a12f259d492bf53c0701003bd7f1745c/rcl/include/rcl/wait.h#L419
             let wait_set_entry = unsafe { *self.rcl_wait_set.waitables.add(i) };
-            if !wait_set_entry.is_null() {
+            let (server_entities, mut req_id) = match self.get_server_entities_ready(server) {
+                Ok((entities, req_id)) => (entities, req_id),
+                Err(e) => return Err(e),
+            };
+            server.set_goal_request_ready(server_entities.goal_request_ready);
+            server.set_cancel_request_ready(server_entities.cancel_request_ready);
+            server.set_result_request_ready(server_entities.result_request_ready);
+            server.set_goal_expired(server_entities.goal_expired);
+            if !wait_set_entry.is_null() && server.is_ready() {
                 ready_entities.servers.push(Arc::clone(&server.waitable));
             }
         }

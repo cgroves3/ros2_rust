@@ -1,5 +1,5 @@
 use crate::{rcl_bindings::*, RclrsError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
@@ -50,7 +50,6 @@ where
 pub struct ActionServerHandle {
     rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
-    pub(crate) in_use_by_wait_set: Arc<AtomicBool>,
 }
 
 impl ActionServerHandle {
@@ -79,6 +78,10 @@ where
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
     handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+    goal_request_ready: Arc<AtomicBool>,
+    cancel_request_ready: Arc<AtomicBool>,
+    result_request_ready: Arc<AtomicBool>,
+    goal_expired: Arc<AtomicBool>,
     _marker: PhantomData<T>,
 }
 
@@ -121,14 +124,12 @@ where
                 type_support_ptr,
                 topic_c_string.as_ptr(),
                 &action_server_options,
-            )
-                .ok()?;
+            ).ok()?;
         }
 
         let handle = Arc::new(ActionServerHandle{
             rcl_action_server_mtx: Mutex::new(rcl_action_server),
             rcl_node_mtx,
-            in_use_by_wait_set: Arc::new(AtomicBool::new(false))
         });
 
         Ok(Self {
@@ -137,6 +138,10 @@ where
             handle_goal_cb,
             handle_cancel_cb,
             handle_accepted_cb,
+            goal_request_ready: Arc::new(AtomicBool::new(false)),
+            cancel_request_ready: Arc::new(AtomicBool::new(false)),
+            result_request_ready: Arc::new(AtomicBool::new(false)),
+            goal_expired: Arc::new(AtomicBool::new(false)),
             _marker: Default::default(),
         })
     }
@@ -148,12 +153,11 @@ where
             // SAFETY: The message type is guaranteed to match the publisher type by the type system.
             // The message does not need to be valid beyond the duration of this function call.
             // The third argument is explictly allowed to be NULL.
-            rcl_acttion_publish_feedback(
+            rcl_action_publish_feedback(
                 rcl_action_server,
                 rmw_message.as_ref() as *const <T as Message>::RmwMsg as *mut _,
                 std::ptr::null_mut(),
-            )
-                .ok()
+            ).ok()?;
         }
     }
 
@@ -213,6 +217,31 @@ where
         }
         Ok((action_msgs::srv::CancelGoal::Request::from_rmw_message_info(&message_info) , request_id_out));
     }
+
+    pub fn execute_goal_request_received(&self) -> () {
+        let (goal_request, mut req_id) = match self.take_goal_request() {
+            Ok((goal_req, req_id)) => (goal_req, req_id),
+            Err(RclrsError::RclError {
+                    //TODO: change this to RCL_RET_ACTION_SERVER_TAKE_FAILED somehow https://docs.ros2.org/dashing/api/rcl_action/action__server_8h.html#ab72504b4879b4944c2b9bbbf2b9aec3b
+                    code: RclReturnCode::ServiceTakeFailed,
+                    ..
+                }) => {
+                // Spurious wakeup – this may happen even when a waitset indicated that this
+                // server was ready, so it shouldn't be an error.
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+    }
+    pub fn execute_cancel_request_received(&self) -> () {
+
+    }
+    pub fn execute_result_request_received(&self) -> () {
+
+    }
+    pub fn execute_check_expired_goals(&self) -> () {
+
+    }
 }
 
 /// Trait to be implemented by concrete Action Server structs.
@@ -223,14 +252,58 @@ pub trait ActionServerBase: Send + Sync {
     fn handle(&self) -> &ActionServerHandle;
     /// Tries to take a new request and run the callback with it.
     fn execute(&self) -> Result<(), RclrsError>;
+
+    /// Sets the goal request ready state to value
+    fn set_goal_request_ready(&self, value: bool) -> ();
+    /// Sets the cancel request ready state to value
+    fn set_cancel_request_ready(&self, value: bool) -> ();
+    /// Sets the result request ready state to value
+    fn set_result_request_ready(&self, value: bool) -> ();
+    /// Sets the goal expired state to value
+    fn set_goal_expired(&self, value: bool) -> ();
+
+    fn is_ready(&self) -> bool;
 }
 
 impl<T> ActionServerBase for ActionServer<T> {
     fn handle(&self) -> &ActionServerHandle {
-        todo!()
+        &self.handle
     }
     fn execute(&self) -> Result<(), RclrsError> {
-        todo!()
+        if (self.goal_request_ready.load(Ordering::SeqCst)) {
+            execute_goal_request_received();
+        }
+        else if (self.cancel_request_ready.load(Ordering::SeqCst)) {
+            execute_cancel_request_received();
+        }
+        else if (self.result_request_ready.load(Ordering::SeqCst)) {
+            execute_result_request_received();
+        }
+        else if (self.goal_expired.load(Ordering::SeqCst)) {
+            execute_check_expired_goals();
+        }
+        else {
+            panic!("Executing action server but nothing is ready");
+        }
+    }
+    fn set_goal_request_ready(&self, value: bool) -> () {
+        self.goal_request_ready.store(value, Ordering::SeqCst)
+    }
+    fn set_cancel_request_ready(&self, value: bool) -> () {
+        self.cancel_request_ready.store(value, Ordering::SeqCst)
+    }
+    fn set_result_request_ready(&self, value: bool) -> () {
+        self.result_request_ready.store(value, Ordering::SeqCst)
+    }
+    fn set_goal_expired(&self, value: bool) -> () {
+        self.goal_expired.store(value, Ordering::SeqCst)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.goal_request_ready.load(Ordering::SeqCst) ||
+            self.cancel_request_ready.load(Ordering::SeqCst) ||
+            self.result_request_ready.load(Ordering::SeqCst) ||
+            self.goal_expired.load(Ordering::SeqCst);
     }
 }
 
@@ -257,12 +330,7 @@ where
     }
 
     pub fn publish_feedback(&self, feedback: &T::Feedback) -> () {
-        let feedback_copy = feedback.clone();
-        unsafe {
-            rcl_action_publish_feedback(
 
-            )
-        }
     }
 
     pub fn get_goal(&self) -> Arc<T> { self.goal_request }
