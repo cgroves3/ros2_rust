@@ -137,6 +137,10 @@ cfg_if::cfg_if! {
         #[derive(Debug)]
         pub struct rosidl_message_type_support_t;
 
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct rcl_action_goal_info_t;
+
         pub const RMW_GID_STORAGE_SIZE: usize = 24;
         pub const RCL_ACTION_UUID_SIZE: usize = 24;
 
