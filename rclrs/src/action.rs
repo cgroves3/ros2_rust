@@ -17,7 +17,6 @@ pub enum GoalResponse {
     AcceptAndExecute = 2,
     AcceptAndDefer = 3,
 }
-
 pub enum CancelResponse {
     Reject = 1,
     Accept = 2,
@@ -73,7 +72,7 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goals: HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>,
+    pub(crate) goals: Arc<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
@@ -163,7 +162,7 @@ where
 
     pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
-            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            writer_guid: [0; 16],
             sequence_number: 0,
         };
         type RmwMsg<T> =
@@ -177,12 +176,12 @@ where
                 &mut request_out as *mut RmwMsg<T> as *mut _,
             ).ok()?
         }
-        Ok((T::Goal::from_rmw_message_info(&message_info) , request_id_out));
+        Ok((T::Goal::from_rmw_message(&request_out) , request_id_out));
     }
 
     pub fn take_result_request(&self) -> Result<(T::Impl::GetResultService::Request, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
-            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            writer_guid: [0; 16],
             sequence_number: 0,
         };
         type RmwMsg<T> =
@@ -196,12 +195,12 @@ where
                 &mut request_out as *mut RmwMsg<T> as *mut _,
             ).ok()?
         }
-        Ok((T::Impl::GetResultService::Request::from_rmw_message_info(&message_info) , request_id_out));
+        Ok((T::Impl::GetResultService::Request::from_rmw_message(&request_out) , request_id_out));
     }
 
     pub fn take_cancel_request(&self) -> Result<(action_msgs::srv::CancelGoal::Request, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
-            writer_guid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            writer_guid: [0; 16],
             sequence_number: 0,
         };
         type RmwMsg<T> =
@@ -215,7 +214,7 @@ where
                 &mut request_out as *mut RmwMsg<T> as *mut _,
             ).ok()?
         }
-        Ok((action_msgs::srv::CancelGoal::Request::from_rmw_message_info(&message_info) , request_id_out));
+        Ok((action_msgs::srv::CancelGoal::Request::from_rmw_message(&request_out) , request_id_out));
     }
 
     pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
@@ -231,21 +230,30 @@ where
             }
             Err(e) => return Err(e),
         };
-        let goal_info_handle = GoalInfoHandle::new(self.handle);
-        self.accept_new_goal(goal_info_handle);
-        let res = (*self.handle_goal_cb.lock().unwrap())(&req_id, goal_request);
-        let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
-        let handle = &*self.handle.lock();
-        //TODO: call rcl_action_accept_new_goal to get a new goal handle as documented by rcl_action_send_goal_response
-        let (ret, mut req_id) = unsafe {
-            // SAFETY: The response type is guaranteed to match the service type by the type system.
-            rcl_action_send_goal_response(
-                handle,
-                &mut req_id,
-                rmw_message.as_ref() as *const <T::Response as Message>::RmwMsg as *mut _,
-            )
-        }.ok();
 
+        let res = (*self.handle_goal_cb.lock().unwrap())(&req_id, goal_request);
+        if (res == GoalResponse::AcceptAndExecute || res == GoalResponse::AcceptAndDefer) {
+            let goal_info_handle = GoalInfoHandle::new(self.handle);
+            let uuid = goal_request.uuid;
+            goal_info_handle.lock().goal_id.uuid = uuid;
+            let (new_goal_handle, error) = self.accept_new_goal(goal_info_handle, goal_request);
+            let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
+            let handle = &*self.handle.lock();
+            unsafe {
+                // SAFETY: The response type is guaranteed to match the service type by the type system.
+                rcl_action_send_goal_response(
+                    handle,
+                    &mut req_id,
+                    rmw_message.as_ref() as *const <T::Response as Message>::RmwMsg as *mut _,
+                )
+            }.ok()?;
+            { self.goals.lock().unwrap() }.insert(uuid, new_goal_handle);
+            if (res == GoalResponse::AcceptAndExecute) {
+                unsafe { rcl_action_update_goal_state(new_goal_handle, GOAL_EVENT_EXECUTE); }.ok()?;
+            }
+            self.publish_status()?;
+            self.call_goal_accept_cb(handle, uuid, goal_request);
+        }
 
     }
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError>  {
@@ -280,11 +288,46 @@ where
 
     }
 
-    pub fn accept_new_goal(&self, goal_info: GoalInfoHandle) -> Result<ServerGoalHandle<T>, RclrsError> {
+    pub fn publish_status(&self) -> Result<(), RclrsError> {
+        let mut num_goals: usize = 0;
+        let mut goal_handles = std::ptr::null_mut();
+        let handle = &*self.handle.lock();
+        unsafe {
+            rcl_action_server_get_goal_handles(
+                handle,
+                goal_handles,
+                num_goals
+            )
+        }.ok()?;
+        let goal_status_array = Arc::new(action_msgs::msg::GoalStatusArray::default());
+        goal_status_array.reserve(num_goals);
+        let mut status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
+        unsafe {
+            rcl_action_get_goal_status_array(
+                handle,
+                &mut status_array
+            )
+        }.ok()?;
+        unsafe { rcl_action_goal_status_array_fini(&mut status_array) }.ok()?;
+        for i in 0..status_array.msg.status_list.size {
+            let status_msg = status_array.msg.status_list[i];
+
+            let goal_status = action_msgs::msg::GoalStatus::default();
+            goal_status.status = status_msg.status;
+            goal_status.goal_info.stamp = status_msg.stamp;
+            goal_status.uuid = status_msg.goal_info.uuid;
+            goal_status_array.status_list.append(goal_status);
+        }
+        unsafe {
+            rcl_action_publish_status(handle, goal_status_array)
+        }.ok()?;
+    }
+
+    pub fn accept_new_goal(&self, goal_info: GoalInfoHandle, goal_req: Arc<T>) -> Result<ServerGoalHandle<T>, RclrsError> {
         let handle = &*self.handle.lock();
         let goal_info_handle = &goal_info.lock();
         let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? };
-        Ok(ServerGoalHandle::new(Arc::new(goal_handle)), );
+        Ok(ServerGoalHandle::new(Arc::new(goal_handle), goal_req));
     }
 }
 

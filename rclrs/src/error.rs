@@ -53,6 +53,7 @@ impl Display for RclrsError {
                     "Could not add entity to wait set because it was already added to a wait set"
                 )
             }
+            RclrsError::RclActionError { code, .. } => write!(f, "{}", code),
         }
     }
 }
@@ -84,6 +85,7 @@ impl Error for RclrsError {
             RclrsError::RclError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::UnknownRclError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::StringContainsNul { err, .. } => Some(err).map(|e| e as &dyn Error),
+            RclrsError::RclActionError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::AlreadyAddedToWaitSet => None,
         }
     }

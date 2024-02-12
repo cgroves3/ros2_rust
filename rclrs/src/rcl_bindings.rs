@@ -142,6 +142,7 @@ cfg_if::cfg_if! {
         pub struct rcl_action_goal_info_t;
 
         pub const RMW_GID_STORAGE_SIZE: usize = 24;
+        // TODO: 16?
         pub const RCL_ACTION_UUID_SIZE: usize = 24;
 
         extern "C" {
