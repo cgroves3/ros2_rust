@@ -72,7 +72,7 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goals: Arc<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>>,
+    pub(crate) goal_handles: Arc<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
@@ -132,7 +132,7 @@ where
         });
 
         Ok(Self {
-            goals: HashMap::new(),
+            goal_handles: HashMap::new(),
             handle,
             handle_goal_cb,
             handle_cancel_cb,
@@ -247,15 +247,20 @@ where
                     rmw_message.as_ref() as *const <T::Response as Message>::RmwMsg as *mut _,
                 )
             }.ok()?;
-            { self.goals.lock().unwrap() }.insert(uuid, new_goal_handle);
+            { self.goal_handles.lock().unwrap() }.insert(uuid, new_goal_handle);
             if (res == GoalResponse::AcceptAndExecute) {
                 unsafe { rcl_action_update_goal_state(new_goal_handle, GOAL_EVENT_EXECUTE); }.ok()?;
             }
             self.publish_status()?;
-            self.call_goal_accept_cb(handle, uuid, goal_request);
+            self.call_goal_accepted_cb(new_goal_handle, uuid, goal_request);
         }
+    }
+
+    // This might not be needed if the server_goal_handle is prepared with the right args and already added to goal_handles
+    pub fn call_goal_accepted_cb(&self, server_goal_handle: ServerGoalHandle, goal_uuid: GoalUUID, goal_request: T::Goal) -> Result<(), RclrsError> {
 
     }
+
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError>  {
         let (cancel_request, mut req_id) = match self.take_cancel_request() {
             Ok((req, req_id)) => (req, req_id),
@@ -327,6 +332,7 @@ where
         let handle = &*self.handle.lock();
         let goal_info_handle = &goal_info.lock();
         let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? };
+        //TODO: Fix this to include to new args
         Ok(ServerGoalHandle::new(Arc::new(goal_handle), goal_req));
     }
 }
@@ -430,6 +436,9 @@ where
 {
     rcl_handle: Arc<rcl_action_goal_handle_t>,
     goal_request: Arc<T>,
+    on_terminal_state: Box<Fn<GoalUUID, T::Result>>,
+    on_executing: Box<Fn<GoalUUID>>,
+    publish_feedback_cb: Box<Fn<T::Feedback>>,
     _marker: PhantomData<T>,
 }
 
@@ -437,10 +446,19 @@ impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub fn new(rcl_handle: Arc<rcl_action_goal_handle_t>,  goal_request: Arc<T>) -> Self {
+    pub fn new(
+        rcl_handle: Arc<rcl_action_goal_handle_t>,
+        goal_request: Arc<T>,
+        on_terminal_state: Box<Fn<GoalUUID, T::Result>>,
+        on_executing: Box<Fn<GoalUUID>>,
+        publish_feedback_cb: Box<Fn<T::Feedback>>,
+    ) -> Self {
         Self {
             rcl_handle,
             goal_request: Arc::clone(&goal_request),
+            on_terminal_state,
+            on_executing,
+            publish_feedback_cb,
             _marker: Default::default(),
         }
     }
