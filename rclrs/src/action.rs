@@ -261,7 +261,6 @@ where
         }
     }
 
-    // This might not be needed if the server_goal_handle is prepared with the right args and already added to goal_handles
     pub fn call_goal_accepted_cb(&self, goal_handle_t: rcl_action_goal_handle_t, goal_uuid: GoalUUID, goal_request: T::Goal) -> () {
         let on_terminal_state = |uuid: GoalUUID, result: T::Result| -> Result<(), RclrsError> {
             self.publish_result(uuid, result);
@@ -311,6 +310,16 @@ where
         }.ok()?;
         let response = Arc::new(action_msgs::srv::CancelGoal::Response::default());
         response.return_code = response_handle.msg.return_code;
+        let goals = response_handle.msg.goals_canceling;
+
+        for i in 0..goal.size {
+            let goal_info = goals.data[i];
+            let uuid = goal_info.uuid;
+            let cb_response_code = self.call_handle_cancel_callback(uuid);
+            if (CancelResponse::Accept == cb_response_code) {
+
+            }
+        }
 
         let res = (*self.handle_cancel_cb.lock().unwrap())(&req_id, cancel_request);
         let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
@@ -401,6 +410,16 @@ where
     pub fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
         let handle = &*self.handle.lock();
         unsafe { rcl_action_notify_goal_done(handle).ok()?; }
+    }
+
+    pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
+        let goal_handle_option = { self.goal_handles.lock().unwrap() }.get(goal_uuid);
+        match goal_handle {
+            Some(handle) => {
+
+            },
+            None => CancelResponse::Reject
+        }
     }
 }
 
