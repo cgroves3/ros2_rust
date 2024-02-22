@@ -1,6 +1,7 @@
 use crate::{rcl_bindings::*, RclrsError};
 use std::sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
+use crate::error::{RclrsError, ToResult};
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
@@ -72,7 +73,9 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles: Arc<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<>>>>,
+    pub(crate) goal_handles: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
+    pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, T::Result>>>,
+    pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
@@ -100,7 +103,7 @@ where
         T: rosidl_runtime_rs::Action,
     {
         // SAFETY: Getting a zero-initialized value is always safe.
-        let mut rcl_action_server = unsafe { rcl_get_zero_initialized_subscription() };
+        let mut rcl_action_server = unsafe { rcl_action_get_zero_initialized_server() };
         let type_support_ptr =
             <T as Message>::RmwMsg::get_type_support() as *const rosidl_message_type_support_t;
         let topic_c_string = CString::new(topic).map_err(|err| RclrsError::StringContainsNul {
@@ -132,7 +135,9 @@ where
         });
 
         Ok(Self {
-            goal_handles: HashMap::new(),
+            goal_handles: Arc:new(Mutex::new(HashMap::new())),
+            goal_results: Arc:new(Mutex::new(HashMap::new())),
+            result_requests: Arc:new(Mutex::new(HashMap::new())),
             handle,
             handle_goal_cb,
             handle_cancel_cb,
@@ -247,7 +252,7 @@ where
                     rmw_message.as_ref() as *const <T::Response as Message>::RmwMsg as *mut _,
                 )
             }.ok()?;
-            { self.goal_handles.lock().unwrap() }.insert(uuid, new_goal_handle);
+            // TODO: rclcpp also inserts into a map of GoalUUID and rcl_action_goal_handle_t pairs for some reason. Unsure if this is needed
             if (res == GoalResponse::AcceptAndExecute) {
                 unsafe { rcl_action_update_goal_state(new_goal_handle, GOAL_EVENT_EXECUTE); }.ok()?;
             }
@@ -257,8 +262,25 @@ where
     }
 
     // This might not be needed if the server_goal_handle is prepared with the right args and already added to goal_handles
-    pub fn call_goal_accepted_cb(&self, server_goal_handle: ServerGoalHandle, goal_uuid: GoalUUID, goal_request: T::Goal) -> Result<(), RclrsError> {
+    pub fn call_goal_accepted_cb(&self, goal_handle_t: rcl_action_goal_handle_t, goal_uuid: GoalUUID, goal_request: T::Goal) -> () {
+        let on_terminal_state = |uuid: GoalUUID, result: T::Result| -> Result<(), RclrsError> {
+            self.publish_result(uuid, result);
+            self.publish_status();
+            self.notify_goal_terminal_state();
+            { self.goal_handles.lock().unwrap() }.remove(uuid);
+            Ok(());
+        };
 
+        let on_executing = |uuid: GoalUUID| -> Result<(), RclrsError> {
+            self.publish_status();
+        };
+
+        let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError>{
+            self.publish_feedback(feedback_msg);
+        };
+        let goal_handle_arc = Arc::new(ServerGoalHandle::new(Arc::new(Mutex::new(goal_handle_t)), Box::new(on_terminal_state), Box::new(on_executing), Box::new(publish_feedback), goal_req));
+        { self.goal_handles.lock().unwrap() }.insert(uuid, goal_handle_arc);
+        (self.handle_accepted_cb)(goal_handle_arc);
     }
 
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError>  {
@@ -274,9 +296,25 @@ where
             }
             Err(e) => return Err(e),
         };
+        //TODO: Set the goal uuid and timestamp for the cancel request
+        let cancel_request_handle = CancelRequestHandle::new(cancel_request.goal_info);
+        let cancel_response_handle = CancelResponseHandle::new();
+        let handle = &*self.handle.lock();
+        let request_handle = cancel_request_handle.lock().unwrap();
+        let response_handle = cancel_response_handle.lock().unwrap();
+        unsafe {
+            rcl_action_process_cancel_request(
+                handle,
+                &request_handle,
+                &mut cancel_response_handle
+            )
+        }.ok()?;
+        let response = Arc::new(action_msgs::srv::CancelGoal::Response::default());
+        response.return_code = response_handle.msg.return_code;
+
         let res = (*self.handle_cancel_cb.lock().unwrap())(&req_id, cancel_request);
         let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
-        let handle = &*self.handle.lock();
+
         unsafe {
             // SAFETY: The response type is guaranteed to match the service type by the type system.
             rcl_action_send_cancel_response(
@@ -328,12 +366,41 @@ where
         }.ok()?;
     }
 
-    pub fn accept_new_goal(&self, goal_info: GoalInfoHandle, goal_req: Arc<T>) -> Result<ServerGoalHandle<T>, RclrsError> {
+    pub fn accept_new_goal(&self, goal_info: GoalInfoHandle, goal_req: Arc<T>) -> Result<rcl_action_goal_handle_t, RclrsError> {
         let handle = &*self.handle.lock();
         let goal_info_handle = &goal_info.lock();
         let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? };
-        //TODO: Fix this to include to new args
-        Ok(ServerGoalHandle::new(Arc::new(goal_handle), goal_req));
+    }
+
+    pub fn publish_result(&self, goal_uuid: GoalUUID, result: T::Result) -> Result<(), RclrsError> {
+        let goal_info = GoalInfoHandle::new(self.handle);
+        goal_info.lock().goal_id.uuid = goal_uuid;
+        let server_handle = &*self.handle.lock();
+        let goal_info_handle = &goal_info.lock();
+        let goal_exists = unsafe {
+            rcl_action_server_goal_exists(server_handle, goal_info_handle).ok()?
+        };
+        if (!goal_exists) {
+            panic!("Asked to publish result for goal that does not exist");
+        }
+
+        { self.goal_results.lock().unwrap() }.insert(goal_uuid, result);
+
+        match { self.result_requests.lock().unwrap() }.get(goal_uuid) {
+            Some(req_ids) => {
+                for req_id in req_ids {
+                    unsafe {
+                        rcl_action_send_result_response(server_handle, req_id, result).ok()?;
+                    }
+                }
+            }
+            None => {},
+        }
+    }
+
+    pub fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
+        let handle = &*self.handle.lock();
+        unsafe { rcl_action_notify_goal_done(handle).ok()?; }
     }
 }
 
@@ -434,11 +501,11 @@ pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    rcl_handle: Arc<rcl_action_goal_handle_t>,
+    rcl_handle: Arc<Mutex<rcl_action_goal_handle_t>>,
     goal_request: Arc<T>,
-    on_terminal_state: Box<Fn<GoalUUID, T::Result>>,
-    on_executing: Box<Fn<GoalUUID>>,
-    publish_feedback_cb: Box<Fn<T::Feedback>>,
+    on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
+    on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
+    publish_feedback_cb: Box<dyn Fn(T::Feedback) ->  Result<(), RclrsError>>,
     _marker: PhantomData<T>,
 }
 
@@ -464,7 +531,7 @@ where
     }
 
     pub fn publish_feedback(&self, feedback: &T::Feedback) -> () {
-
+        (self.publish_feedback_cb)(feedback);
     }
 
     pub fn get_goal(&self) -> Arc<T> { self.goal_request }
@@ -487,5 +554,67 @@ where
 
     pub fn canceled(&self, result: &T::Result) -> Result<(), RclrsError> {
         Ok(())
+    }
+}
+
+impl Drop for ServerGoalHandle {
+    fn drop(&mut self) {
+        let goal_handle = &mut *self.rcl_handle.lock().unwrap();
+        // SAFETY: No preconditions for this function (besides the arguments being valid).
+        unsafe {
+            rcl_action_goal_handle_fini(goal_handle);
+        }
+    }
+}
+
+pub struct CancelRequestHandle {
+    rcl_action_cancel_request_mtx: Mutex<rcl_action_cancel_request_t>,
+    rcl_action_goal_info_mtx: Mutex<rcl_action_goal_info_t>
+}
+
+impl CancelRequestHandle {
+    pub fn new(goal_info: rcl_action_goal_info_t) -> Self {
+        let rcl_action_cancel_req = unsafe { rcl_action_get_zero_initialized_cancel_request() };
+        Self {
+            rcl_action_cancel_request_mtx: Mutex::new(rcl_action_cancel_req),
+            rcl_action_goal_info_mtx: Mutex::new(goal_info)
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_response_t> {
+        self.rcl_action_cancel_request_mtx.lock().unwrap();
+    }
+}
+impl Drop for CancelRequestHandle {
+    fn drop(&mut self) {
+        let cancel_request = &mut *self.lock().unwrap();
+        unsafe {
+            rcl_action_cancel_request_fini(cancel_request);
+        }
+    }
+}
+
+pub struct CancelResponseHandle {
+    rcl_action_cancel_response_mtx: Mutex<rcl_action_cancel_response_t>
+}
+impl CancelResponseHandle {
+    pub fn new() -> Self {
+        let rcl_action_cancel_response = unsafe { rcl_action_get_zero_initialized_cancel_response() };
+        Self {
+            rcl_action_cancel_response_mtx: Mutex::new(rcl_action_cancel_response),
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_response_t> {
+        self.rcl_action_cancel_response_mtx.lock().unwrap();
+    }
+}
+
+impl Drop for CancelResponseHandle {
+    fn drop(&mut self) {
+        let cancel_response = &mut *self.lock().unwrap();
+        unsafe {
+            rcl_action_cancel_response_fini(cancel_response);
+        }
     }
 }
