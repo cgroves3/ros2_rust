@@ -314,7 +314,7 @@ where
         response.return_code = response_handle.msg.return_code;
         let goals = response_handle.msg.goals_canceling;
 
-        for i in 0..goal.size {
+        for i in 0..goals.len() {
             let goal_info = goals.data[i];
             let uuid = goal_info.uuid;
             let cb_response_code = self.call_handle_cancel_callback(uuid);
@@ -326,9 +326,18 @@ where
             }
         }
 
-        let res = (*self.handle_cancel_cb.lock().unwrap())(&req_id, cancel_request);
-        let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
+        // If the user rejects all individual requests to cancel goals,
+        // then we consider the top-level cancel request as rejected.
+        if (goals.len() >= 1 && 0 == response.goal_canceling.len()) {
+            response.return_code = CancelResponse::Reject;
+        }
 
+        if (!response.goals_canceling.empty()) {
+            // at least one goal state changed, publish a new status message
+            self.publish_status();
+        }
+
+        let rmw_message = <T::Response as Message>::into_rmw_message(response.into_cow());
         unsafe {
             // SAFETY: The response type is guaranteed to match the service type by the type system.
             rcl_action_send_cancel_response(
@@ -336,13 +345,62 @@ where
                 &mut req_id,
                 rmw_message.as_ref() as *const <T::Response as Message>::RmwMsg as *mut _,
             )
-        }.ok()
+        }.ok()?;
+
+        Ok(())
     }
     pub fn execute_result_request_received(&self) -> Result<(), RclrsError> {
+        let (result_request, mut req_id) = match self.take_result_request() {
+            Ok((req, req_id)) => (req, req_id),
+            Err(RclrsError::RclActionError {
+                    code: RclActionReturnCode::ActionServerTakeFailed,
+                    ..
+                }) => {
+                // Spurious wakeup – this may happen even when a waitset indicated that this
+                // server was ready, so it shouldn't be an error.
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
 
+        self.result_request_ready.store(false, Ordering::SeqCst);
+        // TODO: Convert the result_request uuid to a uuid
+        let goal_uuid = result_request.uuid;
+        let mut goal_info_handle = &*GoalInfoHandle::new(self.handle);
+
+        let handle = self.handle.lock().unwrap();
+        let mut goal_exists = unsafe { rcl_action_server_goal_exists(handle, goal_info_handle) };
+        if goal_exists {
+            let result_response = unsafe { create_result_response(action_msgs::msg::GoalStatus::STATUS_UNKNOWN) };
+        } else {
+            if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(goal_uuid) {
+                unsafe {
+                    rcl_action_send_result_response(handle, &mut req_id, result_response);
+                }.ok()?
+            } else {
+                if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(goal_uuid) {
+                    request_headers.push_back(req_id);
+                }
+            }
+        }
     }
-    pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
 
+    pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
+        let mut goal_info_handle = &*GoalInfoHandle::new(self.handle);
+        let mut num_expired: &*u32 = &1;
+        while (num_expired > 0) {
+            let handle = self.handle.lock().unwrap();
+            unsafe {
+                rcl_action_expire_goals(handle, goal_info_handle, 1, num_expired)
+            }.ok()?;
+            if (num_expired > 0) {
+                // TODO: Convert the expired goal_info uuid to a uuid
+                let goal_uuid = goal_info_handle.uuid;
+                { self.goal_results.lock().unwrap()}.remove(goal_uuid);
+                { self.result_requests.lock().unwrap()}.remove(goal_uuid);
+                { self.goal_handles.lock().unwrap()}.remove(goal_uuid);
+            }
+        }
     }
 
     pub fn publish_status(&self) -> Result<(), RclrsError> {
@@ -366,7 +424,7 @@ where
             )
         }.ok()?;
         unsafe { rcl_action_goal_status_array_fini(&mut status_array) }.ok()?;
-        for i in 0..status_array.msg.status_list.size {
+        for i in 0..status_array.msg.status_list.len() {
             let status_msg = status_array.msg.status_list[i];
 
             let goal_status = action_msgs::msg::GoalStatus::default();
@@ -400,15 +458,12 @@ where
 
         { self.goal_results.lock().unwrap() }.insert(goal_uuid, result);
 
-        match { self.result_requests.lock().unwrap() }.get(goal_uuid) {
-            Some(req_ids) => {
-                for req_id in req_ids {
-                    unsafe {
-                        rcl_action_send_result_response(server_handle, req_id, result).ok()?;
-                    }
+        if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get(goal_uuid) {
+            for req_id in req_ids {
+                unsafe {
+                    rcl_action_send_result_response(server_handle, req_id, result).ok()?;
                 }
             }
-            None => {},
         }
     }
 
@@ -421,7 +476,7 @@ where
         let goal_handle_option = { self.goal_handles.lock().unwrap() }.get(goal_uuid);
         match goal_handle {
             Some(handle) => {
-                let cancel_cb_response = (self.handle_cancel_cb)(handle);
+                let cancel_cb_response = (self.handle_cancel_cb.lock().unwrap())(handle);
                 match cancel_cb_response {
                     CancelResponse::Accept => {
                         let result = handle.cancel_goal();
