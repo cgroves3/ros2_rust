@@ -3,16 +3,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::{rcl_bindings::*};
 use crate::error::{RclrsError, ToResult};
 
-pub enum GoalEvent {
-    Execute = 1,
-    CancelGoal = 2,
-    Succeed = 3,
-    Abort = 4,
-    Canceled = 5,
-    NumEvents = 6
-}
-
-
 pub struct ServerGoalHandle<T>
     where
         T: rosidl_runtime_rs::Action,
@@ -72,28 +62,28 @@ impl<T> ServerGoalHandle<T>
     pub fn abort(&self, result: &T::Result) -> Result<(), RclrsError> {
         let handle = self.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, GoalEvent::Abort)
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT)
         }.ok()?;
     }
 
     pub fn succeed(&self, result: &T::Result) -> Result<(), RclrsError> {
         let handle = self.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, GoalEvent::Succeed)
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
         }.ok()?;
     }
 
     pub fn cancel_goal(&self, result: &T::Result) -> Result<(), RclrsError> {
         let handle = self.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, GoalEvent::CancelGoal)
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
         }.ok()?;
     }
 
     pub fn canceled(&self, result: &T::Result) -> Result<(), RclrsError> {
         let handle = self.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, GoalEvent::Canceled)
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }.ok()?;
     }
 }

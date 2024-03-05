@@ -371,7 +371,7 @@ where
         let handle = self.handle.lock().unwrap();
         let mut goal_exists = unsafe { rcl_action_server_goal_exists(handle, goal_info_handle) };
         if goal_exists {
-            let result_response = unsafe { create_result_response(action_msgs::msg::GoalStatus::STATUS_UNKNOWN) };
+            let result_response = unsafe { ActionServer::create_result_response(action_msgs::msg::GoalStatus::STATUS_UNKNOWN) };
         } else {
             if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(goal_uuid) {
                 unsafe {
@@ -383,6 +383,12 @@ where
                 }
             }
         }
+    }
+
+    pub fn create_result_response(status: action_msgs::msg::GoalStatus) -> T::Impl::GetResultService::Response {
+        let response = T::Impl::GetResultService::Response::default();
+        response.status = status;
+        return response
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
@@ -509,18 +515,6 @@ impl GoalInfoHandle {
     }
 }
 
-impl Drop for GoalInfoHandle {
-    fn drop(&mut self) {
-        let goal_info = &mut *self.rcl_action_goal_info_mtx.lock().unwrap();
-        let rcl_action_server = &self.rcl_action_server.lock();
-        // SAFETY: No preconditions for this function (besides the arguments being valid).
-        unsafe {
-            rcl_action_goal_info_fini(goal_info, rcl_action_server);
-        }
-    }
-}
-
-
 /// Trait to be implemented by concrete Action Server structs.
 ///
 /// See [`ActionServer<T>`] for an example
@@ -548,16 +542,16 @@ impl<T> ActionServerBase for ActionServer<T> {
     }
     fn execute(&self) -> Result<(), RclrsError> {
         if (self.goal_request_ready.load(Ordering::SeqCst)) {
-            execute_goal_request_received();
+            self.execute_goal_request_received();
         }
         else if (self.cancel_request_ready.load(Ordering::SeqCst)) {
-            execute_cancel_request_received();
+            self.execute_cancel_request_received();
         }
         else if (self.result_request_ready.load(Ordering::SeqCst)) {
-            execute_result_request_received();
+            self.execute_result_request_received();
         }
         else if (self.goal_expired.load(Ordering::SeqCst)) {
-            execute_check_expired_goals();
+            self.execute_check_expired_goals();
         }
         else {
             panic!("Executing action server but nothing is ready");
