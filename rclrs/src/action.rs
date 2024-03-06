@@ -1,9 +1,12 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard};
+use rosidl_runtime_rs::Message;
+
 use std::collections::HashMap;
+use std::ffi::CString;
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
 use crate::{rcl_bindings::*};
 use crate::error::{RclrsError, ToResult};
-use crate::server_goal_handle::{ServerGoalHandle, GoalEvent};
+use crate::{ServerGoalHandle};
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
@@ -137,9 +140,9 @@ where
         });
 
         Ok(Self {
-            goal_handles: Arc:new(Mutex::new(HashMap::new())),
-            goal_results: Arc:new(Mutex::new(HashMap::new())),
-            result_requests: Arc:new(Mutex::new(HashMap::new())),
+            goal_handles: Arc::new(Mutex::new(HashMap::new())),
+            goal_results: Arc::new(Mutex::new(HashMap::new())),
+            result_requests: Arc::new(Mutex::new(HashMap::new())),
             handle,
             handle_goal_cb,
             handle_cancel_cb,
@@ -393,7 +396,7 @@ where
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
         let mut goal_info_handle = &*GoalInfoHandle::new(self.handle);
-        let mut num_expired: &*u32 = &1;
+        let mut num_expired: &*mut u32 = &1;
         while (num_expired > 0) {
             let handle = self.handle.lock().unwrap();
             unsafe {
@@ -541,16 +544,16 @@ impl<T> ActionServerBase for ActionServer<T> {
         &self.handle
     }
     fn execute(&self) -> Result<(), RclrsError> {
-        if (self.goal_request_ready.load(Ordering::SeqCst)) {
+        if self.goal_request_ready.load(Ordering::SeqCst) {
             self.execute_goal_request_received();
         }
-        else if (self.cancel_request_ready.load(Ordering::SeqCst)) {
+        else if self.cancel_request_ready.load(Ordering::SeqCst) {
             self.execute_cancel_request_received();
         }
-        else if (self.result_request_ready.load(Ordering::SeqCst)) {
+        else if self.result_request_ready.load(Ordering::SeqCst) {
             self.execute_result_request_received();
         }
-        else if (self.goal_expired.load(Ordering::SeqCst)) {
+        else if self.goal_expired.load(Ordering::SeqCst) {
             self.execute_check_expired_goals();
         }
         else {
