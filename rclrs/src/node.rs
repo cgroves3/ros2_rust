@@ -1,5 +1,6 @@
 mod builder;
 mod graph;
+
 use std::cmp::PartialEq;
 use std::ffi::CStr;
 use std::fmt;
@@ -15,8 +16,8 @@ use crate::rcl_bindings::*;
 use crate::{
     ActionClient, ActionServer, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
     GoalUUID, GuardCondition, ParameterBuilder, ParameterInterface, ParameterVariant, Parameters,
-    Publisher, QoSProfile, RclrsError, ServerGoalHandle, Service, ServiceBase, Subscription,
-    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult, Waitables
+    Publisher, QoSProfile, RclrsError, Service, ServiceBase, ServerGoalHandle, Subscription,
+    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult
 };
 
 impl Drop for rcl_node_t {
@@ -224,8 +225,8 @@ impl Node {
     pub fn create_action_server<T>(
         &mut self,
         topic: &str,
-        handle_goal: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
+        handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_cancel: fn(Arc<crate::action::ServerGoalHandle<T>>) -> CancelResponse,
         handle_accepted: fn(Arc<ServerGoalHandle<T>>),
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
