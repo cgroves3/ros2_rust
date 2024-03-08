@@ -14,7 +14,7 @@ pub use self::builder::*;
 pub use self::graph::*;
 use crate::rcl_bindings::*;
 use crate::{
-    ActionClient, ActionServer, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
+    ActionClient, ActionServer, ActionServerBase, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
     GoalUUID, GuardCondition, ParameterBuilder, ParameterInterface, ParameterVariant, Parameters,
     Publisher, QoSProfile, RclrsError, Service, ServiceBase, ServerGoalHandle, Subscription,
     SubscriptionBase, SubscriptionCallback, TimeSource, ToResult
@@ -225,6 +225,7 @@ impl Node {
     pub fn create_action_server<T>(
         &mut self,
         topic: &str,
+        qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel: fn(Arc<crate::action::ServerGoalHandle<T>>) -> CancelResponse,
         handle_accepted: fn(Arc<ServerGoalHandle<T>>),
@@ -235,9 +236,13 @@ impl Node {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),
             topic,
+            qos,
+            handle_goal,
+            handle_cancel,
+            handle_accepted
         )?);
         { self.servers_mtx.lock().unwrap() }
-            .push(Arc::downgrade(&server) as Weak<dyn ActionServer>);
+            .push(Arc::downgrade(&action_server) as Weak<dyn ActionServerBase>);
         Ok(action_server)
     }
 
