@@ -10,6 +10,11 @@ use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::{rcl_bindings::*, MessageCow};
 
+
+// SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
+// they are running in. Therefore, this type can be safely sent to another thread.
+unsafe impl Send for rcl_action_server_t {}
+
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
 unsafe impl Send for rcl_action_goal_handle_t {}
@@ -38,8 +43,7 @@ where
     goal_request: Arc<T>,
     on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
-    publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
-    _marker: PhantomData<T>,
+    publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
 }
 
 impl<T> ServerGoalHandle<T>
@@ -58,8 +62,7 @@ where
             goal_request: Arc::clone(&goal_request),
             on_terminal_state,
             on_executing,
-            publish_feedback_cb,
-            _marker: Default::default(),
+            publish_feedback_cb
         }
     }
 
@@ -158,6 +161,7 @@ where
 pub struct ActionServerHandle {
     rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
+    pub(crate) in_use_by_wait_set: Arc<AtomicBool>,
 }
 
 impl ActionServerHandle {
@@ -191,8 +195,7 @@ where
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
-    goal_expired: Arc<AtomicBool>,
-    _marker: PhantomData<T>,
+    goal_expired: Arc<AtomicBool>
 }
 
 impl<T> ActionServer<T>
@@ -242,6 +245,7 @@ where
         let handle = Arc::new(ActionServerHandle {
             rcl_action_server_mtx: Mutex::new(rcl_action_server),
             rcl_node_mtx,
+            in_use_by_wait_set: Arc::new(AtomicBool::new(false))
         });
 
         Ok(Self {
@@ -255,8 +259,7 @@ where
             goal_request_ready: Arc::new(AtomicBool::new(false)),
             cancel_request_ready: Arc::new(AtomicBool::new(false)),
             result_request_ready: Arc::new(AtomicBool::new(false)),
-            goal_expired: Arc::new(AtomicBool::new(false)),
-            _marker: Default::default(),
+            goal_expired: Arc::new(AtomicBool::new(false))
         })
     }
 
@@ -276,13 +279,13 @@ where
         }
     }
 
-    pub fn take_goal_request(&self) -> Result<(T::Goal::Request, rmw_request_id_t), RclrsError> {
+    pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
         type RmwMsg<T> =
-            <<T as rosidl_runtime_rs::Action>::Goal::Request as rosidl_runtime_rs::Message>::RmwMsg;
+            <<T as rosidl_runtime_rs::Action>::Goal as rosidl_runtime_rs::Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
         let handle = &*self.handle.lock();
         unsafe {
@@ -293,16 +296,16 @@ where
             )
             .ok()?
         }
-        Ok((T::Goal::Request::from_rmw_message(&request_out), request_id_out));
+        Ok((T::Goal::from_rmw_message(&request_out), request_id_out));
     }
 
-    pub fn take_result_request(&self) -> Result<(T::Result::Request, rmw_request_id_t), RclrsError> {
+    pub fn take_result_request(&self) -> Result<(T::Result, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
         type RmwMsg<T> =
-            <<T as rosidl_runtime_rs::Action>::Result::Request as rosidl_runtime_rs::Message>::RmwMsg;
+            <<T as rosidl_runtime_rs::Action>::Result as rosidl_runtime_rs::Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
         let handle = &*self.handle.lock();
         unsafe {
@@ -313,7 +316,7 @@ where
             )
             .ok()?
         }
-        Ok((T::Result::Request::from_rmw_message(&request_out), request_id_out));
+        Ok((T::Result::from_rmw_message(&request_out), request_id_out));
     }
 
     pub fn take_cancel_request(
@@ -381,6 +384,7 @@ where
             self.publish_status()?;
             self.call_goal_accepted_cb(new_goal_handle, uuid, goal_request);
         }
+        Ok(())
     }
 
     pub fn call_goal_accepted_cb(
@@ -499,9 +503,8 @@ where
 
         let handle = self.handle.lock().unwrap();
         let mut goal_exists = unsafe { rcl_action_server_goal_exists(handle, goal_info_handle) };
-        if goal_exists {
-            let result_response =
-                unsafe { ActionServer::create_result_response(GoalStatus::STATUS_UNKNOWN) };
+        if !goal_exists {
+            let result_response = ActionServer::create_result_response(GoalStatus::STATUS_UNKNOWN);
         } else {
             if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(goal_uuid)
             {
@@ -510,8 +513,7 @@ where
                 }
                 .ok()?
             } else {
-                if let Some(request_headers) =
-                    { self.result_requests.lock().unwrap() }.get_mut(goal_uuid)
+                if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(goal_uuid)
                 {
                     request_headers.push_back(req_id);
                 }
@@ -519,8 +521,8 @@ where
         }
     }
 
-    pub fn create_result_response(status: GoalStatus) -> T::Result::Response {
-        let response = T::Result::Response::default();
+    pub fn create_result_response(status: GoalStatus) -> T::Result {
+        let response = T::Result::default();
         response.status = status;
         return response;
     }
@@ -660,7 +662,8 @@ pub trait ActionServerBase: Send + Sync {
     fn is_ready(&self) -> bool;
 }
 
-impl<T> ActionServerBase for ActionServer<T> {
+impl<T> ActionServerBase for ActionServer<T> 
+where T: rosidl_runtime_rs::Action {
     fn handle(&self) -> &ActionServerHandle {
         &self.handle
     }
