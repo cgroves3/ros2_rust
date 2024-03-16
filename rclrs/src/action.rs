@@ -35,27 +35,53 @@ pub enum CancelResponse {
     Accept = 2,
 }
 
+pub struct ServerGoalHandleHandle
+{
+    rcl_goal_handle_mtx: Mutex<rcl_action_goal_handle_t>
+}
+
+impl ServerGoalHandleHandle {
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_handle_t> {
+        self.rcl_goal_handle_mtx.lock().unwrap()
+    }
+}
+
+impl Drop for ServerGoalHandleHandle
+{
+    fn drop(&mut self) {
+        let goal_handle = &mut *self.rcl_goal_handle_mtx.lock().unwrap();
+        // SAFETY: No preconditions for this function (besides the arguments being valid).
+        unsafe {
+            rcl_action_goal_handle_fini(goal_handle);
+        }
+    }
+}
+
 pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    rcl_handle_mtx: Arc<Mutex<rcl_action_goal_handle_t>>,
+    rcl_handle: Arc<ServerGoalHandleHandle>,
     goal_request: Arc<T>,
     on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
     publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
 }
 
+unsafe impl<T> Send for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+
+unsafe impl<T> Sync for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+
 impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
     pub fn new(
-        rcl_handle: Arc<rcl_action_goal_handle_t>,
+        rcl_handle: Arc<ServerGoalHandleHandle>,
         goal_request: Arc<T>,
         on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
         on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
-        publish_feedback_cb: Box<dyn Fn(T::Feedback)>,
+        publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>>,
     ) -> Self {
         Self {
             rcl_handle_mtx: rcl_handle,
@@ -66,11 +92,7 @@ where
         }
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_handle_t> {
-        self.rcl_handle_mtx.lock().unwrap()
-    }
-
-    pub fn publish_feedback(&self, feedback: &T::Feedback) -> () {
+    pub fn publish_feedback(&self, feedback: &T::Feedback) -> Result<(), RclrsError>> {
         (self.publish_feedback_cb)(feedback);
     }
 
@@ -119,19 +141,6 @@ where
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
-    }
-}
-
-impl<T> Drop for ServerGoalHandle<T>
-where
-    T: rosidl_runtime_rs::Action,
-{
-    fn drop(&mut self) {
-        let goal_handle = &mut *self.rcl_handle_mtx.lock().unwrap();
-        // SAFETY: No preconditions for this function (besides the arguments being valid).
-        unsafe {
-            rcl_action_goal_handle_fini(goal_handle);
-        }
     }
 }
 
@@ -263,8 +272,8 @@ where
         })
     }
 
-    pub fn publish_feedback<'a, M: MessageCow<'a, T>>(&self, message: M) -> Result<(), RclrsError> {
-        let rmw_message = T::into_rmw_message(message.into_cow());
+    pub fn publish_feedback(&self, message: T::Feedback) -> Result<(), RclrsError> {
+        let rmw_message = <T::Feedback as Message>::into_rmw_message(res.into_cow());
         let rcl_action_server = &mut *self.handle.lock();
         unsafe {
             // SAFETY: The message type is guaranteed to match the publisher type by the type system.
@@ -389,7 +398,7 @@ where
 
     pub fn call_goal_accepted_cb(
         &self,
-        goal_handle_t: rcl_action_goal_handle_t,
+        goal_handle: rcl_action_goal_handle_t,
         goal_uuid: GoalUUID,
         goal_request: T::Goal,
     ) -> () {
@@ -408,8 +417,13 @@ where
         let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
             self.publish_feedback(feedback_msg);
         };
+
+        let goal_handle_handle = ServerGoalHandleHandle {
+            rcl_goal_handle_mtx: Mutex::new(goal_handle)
+        };
+
         let goal_handle_arc = Arc::new(ServerGoalHandle::new(
-            Arc::new(Mutex::new(goal_handle_t)),
+            Arc::new(goal_handle_handle),
             Arc::new(goal_request),
             Box::new(on_terminal_state),
             Box::new(on_executing),
@@ -628,6 +642,7 @@ pub struct GoalInfoHandle {
     rcl_action_goal_info_mtx: Mutex<rcl_action_goal_info_t>,
     rcl_action_server: Arc<ActionServerHandle>,
 }
+
 impl GoalInfoHandle {
     pub fn new(rcl_action_server: Arc<ActionServerHandle>) -> Self {
         let mut goal_info = unsafe { rcl_action_get_zero_initialized_goal_info };
@@ -636,6 +651,7 @@ impl GoalInfoHandle {
             rcl_action_server,
         }
     }
+
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_info_t> {
         self.rcl_action_goal_info_mtx.lock().unwrap()
     }
