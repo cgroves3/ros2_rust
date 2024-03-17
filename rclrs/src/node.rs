@@ -224,7 +224,7 @@ impl Node {
     // TODO: make action server's lifetime depend on node's lifetime
     pub fn create_action_server<T>(
         &mut self,
-        topic: &str,
+        name: &str,
         qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel: fn(Arc<crate::action::ServerGoalHandle<T>>) -> CancelResponse,
@@ -235,7 +235,8 @@ impl Node {
     {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),
-            topic,
+            name,
+            self.get_clock(),
             qos,
             handle_goal,
             handle_cancel,

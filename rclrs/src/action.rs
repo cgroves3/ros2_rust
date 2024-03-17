@@ -10,6 +10,7 @@ use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::{rcl_bindings::*, MessageCow};
 
+use crate::Clock;
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
@@ -60,7 +61,7 @@ pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    goal_handle_handle: Arc<ServerGoalHandleHandle>,
+    handle: Arc<ServerGoalHandleHandle>,
     goal_request: Arc<T>,
     on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
@@ -76,14 +77,14 @@ where
     T: rosidl_runtime_rs::Action,
 {
     pub fn new(
-        goal_handle_handle: Arc<ServerGoalHandleHandle>,
+        handle: Arc<ServerGoalHandleHandle>,
         goal_request: Arc<T>,
         on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
         on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
         publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
     ) -> Self {
         Self {
-            goal_handle_handle,
+            handle,
             goal_request: Arc::clone(&goal_request),
             on_terminal_state,
             on_executing,
@@ -92,7 +93,14 @@ where
     }
 
     pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
-        (self.publish_feedback_cb)(feedback);
+        (self.publish_feedback_cb)(feedback)
+    }
+
+    fn get_state(&self) -> Result<i8, RclrsError> {
+        let goal_handle = &*self.handle.lock();
+        let mut state = &mut GoalStatus::STATUS_UNKNOWN;
+        unsafe { rcl_action_goal_handle_get_status(goal_handle, &mut *state) }.ok()?;
+        Ok(*state)
     }
 
     pub fn get_goal(&self) -> Arc<T> {
@@ -100,46 +108,59 @@ where
     }
 
     pub fn is_canceling(&self) -> bool {
-        false
+        match self.get_state() {
+            Ok(state) => GoalStatus::STATUS_CANCELING == state,
+            Err(..) => false
+        }
     }
 
     pub fn is_active(&self) -> bool {
-        false
+        let handle = &*self.handle.lock();
+        unsafe { rcl_action_goal_handle_is_active(handle) }
     }
 
     pub fn is_executing(&self) -> bool {
-        false
+        match self.get_state() {
+            Ok(state) => GoalStatus::STATUS_EXECUTING == state,
+            Err(..) => false
+        }
     }
 
     //TODO: Is `result` needed for these methods?
     pub fn abort(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.goal_handle_handle.lock();
-        unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) }
-            .ok()?;
+        let handle = &mut *self.handle.lock();
+        unsafe { 
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
+        }
+        .ok()?;
+        Ok(())
     }
 
     pub fn succeed(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.goal_handle_handle.lock();
+        let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
         }
         .ok()?;
+        Ok(())
     }
 
     pub fn cancel_goal(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.goal_handle_handle.lock();
+        let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
         }
         .ok()?;
+        Ok(())
     }
 
     pub fn canceled(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.goal_handle_handle.lock();
+        let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
+        Ok(())
     }
 }
 
@@ -213,7 +234,8 @@ where
     /// Creates a new action server.
     pub(crate) fn new(
         rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
-        topic: &str,
+        name: &str,
+        clock: Clock,
         qos: QoSProfile,
         handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
@@ -226,18 +248,19 @@ where
         let mut rcl_action_server = unsafe { rcl_action_get_zero_initialized_server() };
         let type_support_ptr =
             <T as rosidl_runtime_rs::Action>::get_type_support() as *const rosidl_action_type_support_t;
-        let topic_c_string = CString::new(topic).map_err(|err| RclrsError::StringContainsNul {
+        let name_c_string = CString::new(name).map_err(|err| RclrsError::StringContainsNul {
             err,
-            s: topic.into(),
+            s: name.into(),
         })?;
 
         // SAFETY: No preconditions for this function.
         let mut action_server_options = unsafe { rcl_action_server_get_default_options() };
-        action_server_options.goal_service_qos.qos = qos.into();
-        action_server_options.cancel_service_qos.qos = qos.into();
-        action_server_options.result_service_qos.qos = qos.into();
-        action_server_options.feedback_topic_qos.qos = qos.into();
-        action_server_options.status_topic_qos.qos = qos.into();
+        action_server_options.goal_service_qos = qos.into();
+        action_server_options.cancel_service_qos = qos.into();
+        action_server_options.result_service_qos = qos.into();
+        action_server_options.feedback_topic_qos = qos.into();
+        action_server_options.status_topic_qos = qos.into();
+        let &mut server_clock = clock.rcl_clock.lock().unwrap();
         unsafe {
             // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
             // The rcl_node is kept alive because it is co-owned by the subscription.
@@ -247,8 +270,9 @@ where
             rcl_action_server_init(
                 &mut rcl_action_server,
                 &*rcl_node_mtx.lock().unwrap(),
+                &mut server_clock,
                 type_support_ptr,
-                topic_c_string.as_ptr(),
+                name_c_string.as_ptr(),
                 &action_server_options,
             )
             .ok()?;
