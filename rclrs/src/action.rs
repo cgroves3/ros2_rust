@@ -22,7 +22,6 @@ unsafe impl Send for rcl_action_goal_handle_t {}
 unsafe impl Sync for rcl_action_goal_handle_t {}
 
 use std::marker::PhantomData;
-
 pub type GoalUUID = [u8; RCL_ACTION_UUID_SIZE];
 
 pub enum GoalResponse {
@@ -61,7 +60,7 @@ pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    rcl_handle: Arc<ServerGoalHandleHandle>,
+    goal_handle_handle: Arc<ServerGoalHandleHandle>,
     goal_request: Arc<T>,
     on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
@@ -77,14 +76,14 @@ where
     T: rosidl_runtime_rs::Action,
 {
     pub fn new(
-        rcl_handle: Arc<ServerGoalHandleHandle>,
+        goal_handle_handle: Arc<ServerGoalHandleHandle>,
         goal_request: Arc<T>,
         on_terminal_state: Box<dyn Fn(GoalUUID, T::Result) -> Result<(), RclrsError>>,
         on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
-        publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>>,
+        publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
     ) -> Self {
         Self {
-            rcl_handle_mtx: rcl_handle,
+            goal_handle_handle,
             goal_request: Arc::clone(&goal_request),
             on_terminal_state,
             on_executing,
@@ -92,7 +91,7 @@ where
         }
     }
 
-    pub fn publish_feedback(&self, feedback: &T::Feedback) -> Result<(), RclrsError>> {
+    pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
         (self.publish_feedback_cb)(feedback);
     }
 
@@ -114,13 +113,13 @@ where
 
     //TODO: Is `result` needed for these methods?
     pub fn abort(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.lock();
+        let handle = self.goal_handle_handle.lock();
         unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) }
             .ok()?;
     }
 
     pub fn succeed(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.lock();
+        let handle = self.goal_handle_handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
         }
@@ -128,7 +127,7 @@ where
     }
 
     pub fn cancel_goal(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.lock();
+        let handle = self.goal_handle_handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
         }
@@ -136,7 +135,7 @@ where
     }
 
     pub fn canceled(&self, result: &T::Result) -> Result<(), RclrsError> {
-        let handle = self.lock();
+        let handle = self.goal_handle_handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
@@ -226,7 +225,7 @@ where
         // SAFETY: Getting a zero-initialized value is always safe.
         let mut rcl_action_server = unsafe { rcl_action_get_zero_initialized_server() };
         let type_support_ptr =
-            <T as Message>::RmwMsg::get_type_support() as *const rosidl_message_type_support_t;
+            <T as rosidl_runtime_rs::Action>::get_type_support() as *const rosidl_action_type_support_t;
         let topic_c_string = CString::new(topic).map_err(|err| RclrsError::StringContainsNul {
             err,
             s: topic.into(),
@@ -234,7 +233,11 @@ where
 
         // SAFETY: No preconditions for this function.
         let mut action_server_options = unsafe { rcl_action_server_get_default_options() };
-        action_server_options.qos = qos.into();
+        action_server_options.goal_service_qos.qos = qos.into();
+        action_server_options.cancel_service_qos.qos = qos.into();
+        action_server_options.result_service_qos.qos = qos.into();
+        action_server_options.feedback_topic_qos.qos = qos.into();
+        action_server_options.status_topic_qos.qos = qos.into();
         unsafe {
             // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
             // The rcl_node is kept alive because it is co-owned by the subscription.
@@ -273,7 +276,7 @@ where
     }
 
     pub fn publish_feedback(&self, message: T::Feedback) -> Result<(), RclrsError> {
-        let rmw_message = <T::Feedback as Message>::into_rmw_message(res.into_cow());
+        let rmw_message = <T::Feedback as Message>::into_rmw_message(message.into_cow());
         let rcl_action_server = &mut *self.handle.lock();
         unsafe {
             // SAFETY: The message type is guaranteed to match the publisher type by the type system.
@@ -335,8 +338,8 @@ where
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        type RmwMsg<T> = <CancelGoal_Request as rosidl_runtime_rs::Message>::RmwMsg;
-        let mut request_out = RmwMsg::<T>::default();
+        type RmwMsg = <CancelGoal_Request as rosidl_runtime_rs::Message>::RmwMsg;
+        let mut request_out = RmwMsg::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
