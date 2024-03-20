@@ -103,6 +103,10 @@ impl Clock {
         }
     }
 
+    pub fn get_clock_handle(&self) -> rcl_clock_t {
+        self.rcl_clock.lock().unwrap();
+    }
+
     /// Helper function to privately initialize a default clock, with the same behavior as
     /// `rcl_init_generic_clock`. By defining a private function instead of implementing
     /// `Default`,  we avoid exposing a public API to create an invalid clock.

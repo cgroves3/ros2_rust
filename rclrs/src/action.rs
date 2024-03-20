@@ -1,5 +1,6 @@
 use rosidl_runtime_rs::Message;
 
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
@@ -260,7 +261,7 @@ where
         action_server_options.result_service_qos = qos.into();
         action_server_options.feedback_topic_qos = qos.into();
         action_server_options.status_topic_qos = qos.into();
-        let &mut server_clock = clock.rcl_clock.lock().unwrap();
+        let server_clock = &mut clock.get_clock_handle();
         unsafe {
             // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
             // The rcl_node is kept alive because it is co-owned by the subscription.
@@ -269,8 +270,8 @@ where
             // TODO: type support?
             rcl_action_server_init(
                 &mut rcl_action_server,
-                &*rcl_node_mtx.lock().unwrap(),
-                &mut server_clock,
+                &mut *rcl_node_mtx.lock().unwrap(),
+                server_clock,
                 type_support_ptr,
                 name_c_string.as_ptr(),
                 &action_server_options,
@@ -308,11 +309,11 @@ where
             // The third argument is explictly allowed to be NULL.
             rcl_action_publish_feedback(
                 rcl_action_server,
-                rmw_message.as_ref() as *const <T as Message>::RmwMsg as *mut _,
-                std::ptr::null_mut(),
+                rmw_message.as_ref() as *const <T::Feedback as Message>::RmwMsg as *mut _,
             )
             .ok()?;
         }
+        Ok(())
     }
 
     pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
@@ -330,9 +331,9 @@ where
                 &mut request_id_out,
                 &mut request_out as *mut RmwMsg<T> as *mut _,
             )
-            .ok()?
+            .ok()?;
         }
-        Ok((T::Goal::from_rmw_message(&request_out), request_id_out));
+        Ok((T::Goal::from_rmw_message(&request_out), request_id_out))
     }
 
     pub fn take_result_request(&self) -> Result<(T::Result, rmw_request_id_t), RclrsError> {
@@ -352,7 +353,7 @@ where
             )
             .ok()?
         }
-        Ok((T::Result::from_rmw_message(&request_out), request_id_out));
+        Ok((T::Result::from_rmw_message(&request_out), request_id_out))
     }
 
     pub fn take_cancel_request(
@@ -373,10 +374,7 @@ where
             )
             .ok()?
         }
-        Ok((
-            CancelGoal_Request::from_rmw_message(&request_out),
-            request_id_out,
-        ));
+        Ok((CancelGoal_Request::from_rmw_message(&request_out), request_id_out))
     }
 
     pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
