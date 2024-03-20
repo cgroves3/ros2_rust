@@ -333,7 +333,7 @@ where
             )
             .ok()?;
         }
-        Ok((T::Goal::from_rmw_message(&request_out), request_id_out))
+        Ok((T::Goal::from_rmw_message(request_out), request_id_out))
     }
 
     pub fn take_result_request(&self) -> Result<(T::Result, rmw_request_id_t), RclrsError> {
@@ -353,7 +353,7 @@ where
             )
             .ok()?
         }
-        Ok((T::Result::from_rmw_message(&request_out), request_id_out))
+        Ok((T::Result::from_rmw_message(request_out), request_id_out))
     }
 
     pub fn take_cancel_request(
@@ -363,18 +363,17 @@ where
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        type RmwMsg = <CancelGoal_Request as rosidl_runtime_rs::Message>::RmwMsg;
-        let mut request_out = RmwMsg::default();
+        let mut request_out = <action_msgs::srv::CancelGoal_Request as Message>::RmwMsg::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
                 &mut request_id_out,
-                &mut request_out as *mut RmwMsg<T> as *mut _,
+                &mut request_out as *mut CancelGoal_Request::RmwMsg as *mut _,
             )
             .ok()?
         }
-        Ok((CancelGoal_Request::from_rmw_message(&request_out), request_id_out))
+        Ok((CancelGoal_Request::from_rmw_message(request_out), request_id_out))
     }
 
     pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
@@ -391,12 +390,12 @@ where
             Err(e) => return Err(e),
         };
 
-        let res = (*self.handle_goal_cb.lock().unwrap())(&req_id, goal_request);
+        let res = (self.handle_goal_cb)(&goal_request.uuid, goal_request);
         if res == GoalResponse::AcceptAndExecute || res == GoalResponse::AcceptAndDefer {
             let goal_info_handle = GoalInfoHandle::new(self.handle);
             let uuid = goal_request.uuid;
             goal_info_handle.lock().goal_id.uuid = uuid;
-            let (new_goal_handle, error) = self.accept_new_goal(goal_info_handle, goal_request);
+            let (new_goal_handle, error) = self.accept_new_goal(goal_info_handle, goal_request.into());
             let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
             let handle = &*self.handle.lock();
             unsafe {
