@@ -14,6 +14,22 @@ for subfolder, action in action_specs:
     action_srv_specs.append((subfolder, action.get_result_service))
 }@
 
+@{
+TEMPLATE(
+    'msg_idiomatic.rs.em',
+    package_name=package_name, interface_path=interface_path,
+    msg_specs=action_msg_specs,
+    get_rs_name=get_rs_name, get_rmw_rs_type=get_rmw_rs_type,
+    pre_field_serde=pre_field_serde,
+    get_idiomatic_rs_type=get_idiomatic_rs_type,
+    constant_value_to_rs=constant_value_to_rs)
+}@
+
+@{
+type_name = action_spec.namespaced_type.name
+}@
+
+
 pub mod rmw {
 @{
 TEMPLATE(
@@ -26,17 +42,6 @@ TEMPLATE(
     constant_value_to_rs=constant_value_to_rs)
 }@
 }  // mod rmw
-
-@{
-TEMPLATE(
-    'msg_idiomatic.rs.em',
-    package_name=package_name, interface_path=interface_path,
-    msg_specs=action_msg_specs,
-    get_rs_name=get_rs_name, get_rmw_rs_type=get_rmw_rs_type,
-    pre_field_serde=pre_field_serde,
-    get_idiomatic_rs_type=get_idiomatic_rs_type,
-    constant_value_to_rs=constant_value_to_rs)
-}@
 
 @[for subfolder, action_spec in action_specs]
 

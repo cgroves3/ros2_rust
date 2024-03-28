@@ -316,6 +316,7 @@ where
         Ok(())
     }
 
+    
     pub fn take_goal_request(&self) -> Result<(T::Goal, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
@@ -335,6 +336,7 @@ where
         }
         Ok((T::Goal::from_rmw_message(request_out), request_id_out))
     }
+
 
     pub fn take_result_request(&self) -> Result<(T::Result, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
@@ -363,13 +365,13 @@ where
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        let mut request_out = <action_msgs::srv::CancelGoal_Request as Message>::RmwMsg::default();
+        let mut request_out = <CancelGoal_Request as Message>::RmwMsg::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
                 &mut request_id_out,
-                &mut request_out as *mut CancelGoal_Request::RmwMsg as *mut _,
+                &mut request_out as *mut <CancelGoal_Request as Message>::RmwMsg as *mut _,
             )
             .ok()?
         }
@@ -390,12 +392,13 @@ where
             Err(e) => return Err(e),
         };
 
-        let res = (self.handle_goal_cb)(&goal_request.uuid, goal_request);
-        if res == GoalResponse::AcceptAndExecute || res == GoalResponse::AcceptAndDefer {
+        let res = (self.handle_goal_cb)(&goal_request.uuid, goal_request.into());
+
+        if matches!(res, GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer) {
             let goal_info_handle = GoalInfoHandle::new(self.handle);
             let uuid = goal_request.uuid;
             goal_info_handle.lock().goal_id.uuid = uuid;
-            let (new_goal_handle, error) = self.accept_new_goal(goal_info_handle, goal_request.into());
+            let (new_goal_handle, error) = self.accept_new_goal(goal_info_handle, goal_request);
             let rmw_message = <T::Response as Message>::into_rmw_message(res.into_cow());
             let handle = &*self.handle.lock();
             unsafe {
@@ -408,7 +411,7 @@ where
             }
             .ok()?;
             // TODO: rclcpp also inserts into a map of GoalUUID and rcl_action_goal_handle_t pairs for some reason. Unsure if this is needed
-            if res == GoalResponse::AcceptAndExecute {
+            if matches!(res, GoalResponse::AcceptAndExecute) {
                 unsafe {
                     rcl_action_update_goal_state(new_goal_handle, rcl_action_goal_event_e::Execute);
                 }
@@ -542,14 +545,20 @@ where
         let handle = self.handle.lock().unwrap();
         let mut goal_exists = unsafe { rcl_action_server_goal_exists(handle, goal_info_handle) };
         if !goal_exists {
-            let result_response = ActionServer::create_result_response(GoalStatus::STATUS_UNKNOWN);
+            type ResultResponse<T> = <<<T as rosidl_runtime_rs::Action>::GetResult as rosidl_runtime_rs::Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
+            //TODO: set this to unknown
+            let mut result_response = ResultResponse::<T>::default();
+            unsafe {
+                rcl_action_send_result_response(handle, &mut req_id, result_response);
+            }
+            .ok()?;
         } else {
             if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(goal_uuid)
             {
                 unsafe {
-                    rcl_action_send_result_response(handle, &mut req_id, result_response);
+                    rcl_action_send_result_response(handle, &mut req_id, result_response)
                 }
-                .ok()?
+                .ok()?;
             } else {
                 if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(goal_uuid)
                 {
@@ -557,12 +566,7 @@ where
                 }
             }
         }
-    }
-
-    pub fn create_result_response(status: GoalStatus) -> T::Result {
-        let response = T::Result::default();
-        response.status = status;
-        return response;
+        Okay(())
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {

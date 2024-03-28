@@ -161,18 +161,29 @@ pub trait Service: 'static {
     fn get_type_support() -> *const std::os::raw::c_void;
 }
 
+pub trait SendGoalService : Service {
+    fn get_uuid() -> [u8; 16]
+    fn set_uuid([u8; 16]) -> ()
+}
+
 /// Trait for actions.
 ///
 /// User code never needs to call this trait's method, much less implement this trait.
 pub trait Action: 'static {
-    /// The goal message associated with this service.
+    /// The goal message associated with this action.
     type Goal: Message;
 
-    /// The result message associated with this service.
+    /// The result message associated with this action.
     type Result: Message;
 
-    /// The feedback message associated with this service.
+    /// The feedback message associated with this action.
     type Feedback: Message;
+
+    /// The service for sending goals associated with this action.
+    type SendGoal: SendGoalService;
+
+    /// The service for getting results associated with this action.
+    type GetResult: Service;
 
     /// Get a pointer to the correct `rosidl_action_type_support_t` structure.
     fn get_type_support() -> *const std::os::raw::c_void;
