@@ -215,11 +215,11 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
-    pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, T::Result>>>,
-    pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
+    pub(crate) goal_handles: Arc<Mutex<HashMap<crate::server::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
+    pub(crate) goal_results: Arc<Mutex<HashMap<crate::server::GoalUUID, T::Result>>>,
+    pub(crate) result_requests: Arc<Mutex<HashMap<crate::server::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
-    handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+    handle_goal_cb: fn(&crate::server::GoalUUID, Arc<T::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
     handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
     goal_request_ready: Arc<AtomicBool>,
@@ -238,7 +238,7 @@ where
         name: &str,
         clock: Clock,
         qos: QoSProfile,
-        handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_goal_cb: fn(&crate::server::GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
         handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
     ) -> Result<Self, RclrsError>

@@ -38,9 +38,11 @@ set(_generated_common_rs_files "")
 
 set(_generated_msg_rs_files "")
 set(_generated_srv_rs_files "")
+set(_generated_action_rs_files "")
 
 set(_has_msg FALSE)
 set(_has_srv FALSE)
+set(_has_action FALSE)
 
 foreach(_typesupport_impl ${_typesupport_impls})
   set(_generated_extension_${_typesupport_impl}_files "")
@@ -89,6 +91,17 @@ if(${_has_srv})
 
   foreach(_typesupport_impl ${_typesupport_impls})
     list_append_unique(_generated_extension_${_typesupport_impl}_files "${_output_path}/srv_rs.ep.${_typesupport_impl}.c")
+    list_append_unique(_generated_extension_files "${_generated_extension_${_typesupport_impl}_files}")
+  endforeach()
+endif()
+
+if(${_has_action})
+  list(APPEND _generated_action_rs_files
+    "${_output_path}/rust/src/action.rs"
+  )
+
+  foreach(_typesupport_impl ${_typesupport_impls})
+    list_append_unique(_generated_extension_${_typesupport_impl}_files "${_output_path}/action_rs.ep.${_typesupport_impl}.c")
     list_append_unique(_generated_extension_files "${_generated_extension_${_typesupport_impl}_files}")
   endforeach()
 endif()
@@ -161,6 +174,7 @@ set_property(
   ${_generated_common_rs_files}
   ${_generated_msg_rs_files}
   ${_generated_srv_rs_files}
+  ${_generated_action_rs_files}
   PROPERTY GENERATED 1)
 
 set(_rsext_suffix "__rsext")
@@ -178,7 +192,8 @@ endforeach()
 if(BUILD_TESTING AND rosidl_generate_interfaces_ADD_LINTER_TESTS)
   if(
     NOT _generated_msg_rs_files STREQUAL "" OR
-    NOT _generated_srv_rs_files STREQUAL ""
+    NOT _generated_srv_rs_files STREQUAL "" OR
+    NOT _generated_action_rs_files STREQUAL ""
   )
   # TODO(esteve): add linters for Rust files
   endif()

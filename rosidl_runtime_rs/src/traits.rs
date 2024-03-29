@@ -162,8 +162,8 @@ pub trait Service: 'static {
 }
 
 pub trait SendGoalService : Service {
-    fn get_uuid() -> [u8; 16]
-    fn set_uuid([u8; 16]) -> ()
+    fn get_uuid() -> [u8; 16];
+    fn set_uuid(uuid: [u8; 16]) -> ();
 }
 
 /// Trait for actions.
