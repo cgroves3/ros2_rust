@@ -345,30 +345,30 @@ impl WaitSet {
         Ok(())
     }
 
-    fn get_server_entities_ready(&mut self, server: Arc<dyn ActionServerBase>) -> Result<ServerEntities, RclrsError> {
-        let goal_request_ready = false;
-        let cancel_request_ready = false;
-        let result_request_ready = false;
-        let goal_expired = false;
+    // fn get_server_entities_ready(&mut self, server: Arc<dyn ActionServerBase>) -> Result<ServerEntities, RclrsError> {
+    //     let goal_request_ready = false;
+    //     let cancel_request_ready = false;
+    //     let result_request_ready = false;
+    //     let goal_expired = false;
 
-        unsafe {
-            rcl_action_server_wait_set_get_entities_ready(
-                &mut self.rcl_wait_set,
-                &*server.handle().lock() as *const _,
-                &goal_request_ready,
-                &cancel_request_ready,
-                &result_request_ready,
-                &goal_expired
-            );
-        }
-        .ok()?;
-        Ok(ServerEntities::new(
-            goal_request_ready,
-            cancel_request_ready,
-            result_request_ready,
-            goal_expired
-        ));
-    }
+    //     unsafe {
+    //         rcl_action_server_wait_set_get_entities_ready(
+    //             &mut self.rcl_wait_set,
+    //             &*server.handle().lock() as *const _,
+    //             &goal_request_ready,
+    //             &cancel_request_ready,
+    //             &result_request_ready,
+    //             &goal_expired
+    //         );
+    //     }
+    //     .ok()?;
+    //     Ok(ServerEntities::new(
+    //         goal_request_ready,
+    //         cancel_request_ready,
+    //         result_request_ready,
+    //         goal_expired
+    //     ))
+    // }
 
     /// Blocks until the wait set is ready, or until the timeout has been exceeded.
     ///
@@ -474,16 +474,8 @@ impl WaitSet {
             // SAFETY: The `servers` entry is an array of pointers, and this dereferencing is
             // equivalent to
             // https://github.com/ros2/rcl/blob/35a31b00a12f259d492bf53c0701003bd7f1745c/rcl/include/rcl/wait.h#L419
-            let wait_set_entry = unsafe { *self.rcl_wait_set.waitables.add(i) };
-            let (server_entities, mut req_id) = match self.get_server_entities_ready(server) {
-                Ok((entities, req_id)) => (entities, req_id),
-                Err(e) => return Err(e),
-            };
-            server.set_goal_request_ready(server_entities.goal_request_ready);
-            server.set_cancel_request_ready(server_entities.cancel_request_ready);
-            server.set_result_request_ready(server_entities.result_request_ready);
-            server.set_goal_expired(server_entities.goal_expired);
-            if !wait_set_entry.is_null() && server.is_ready() {
+            let wait_set_entry = unsafe { *self.rcl_wait_set.servers.add(i) };
+            if !wait_set_entry.is_null() && server.waitable.is_ready() {
                 ready_entities.servers.push(Arc::clone(&server.waitable));
             }
         }

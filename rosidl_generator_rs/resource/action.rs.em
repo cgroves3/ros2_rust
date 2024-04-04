@@ -51,6 +51,15 @@ type_name = action_spec.namespaced_type.name
     type Goal = crate::@(subfolder)::rmw::@(type_name)_Goal;
     type Result = crate::@(subfolder)::rmw::@(type_name)_Result;
     type Feedback = crate::@(subfolder)::rmw::@(type_name)_Feedback;
+
+    type SendGoalService = crate::@(subfolder)::rmw::@(type_name)_SendGoal;
+    type GetResultService = crate::@(subfolder)::rmw::@(type_name)_GetResult;
+    type FeedbackMessage = crate::@(subfolder)::rmw::@(type_name)_FeedbackMessage;
+
+    /// The generic service to cancel a goal.
+    using CancelGoalService = action_msgs::srv::CancelGoal;
+    /// The generic message for the status of a goal.
+    using GoalStatusMessage = action_msgs::msg::GoalStatusArray;
   }
 
 @[end for]
