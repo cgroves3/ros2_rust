@@ -261,13 +261,12 @@ where
         action_server_options.result_service_qos = qos.into();
         action_server_options.feedback_topic_qos = qos.into();
         action_server_options.status_topic_qos = qos.into();
-        let server_clock = &mut clock.get_clock_handle();
+        let server_clock = &mut clock.into();
         unsafe {
             // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
             // The rcl_node is kept alive because it is co-owned by the subscription.
             // The topic name and the options are copied by this function, so they can be dropped
             // afterwards.
-            // TODO: type support?
             rcl_action_server_init(
                 &mut rcl_action_server,
                 &mut *rcl_node_mtx.lock().unwrap(),
@@ -614,7 +613,8 @@ where
     ) -> Result<rcl_action_goal_handle_t, RclrsError> {
         let handle = &*self.handle.lock();
         let goal_info_handle = &goal_info.lock();
-        let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? };
+        let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? }
+        Okay()
     }
 
     pub fn publish_result(&self, goal_uuid: GoalUUID, result: T::Result) -> Result<(), RclrsError> {
@@ -642,8 +642,8 @@ where
     pub fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
         let handle = &*self.handle.lock();
         unsafe {
-            rcl_action_notify_goal_done(handle).ok()?;
-        }
+            rcl_action_notify_goal_done(handle)
+        }.ok()?
     }
 
     pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
@@ -708,9 +708,11 @@ pub trait ActionServerBase: Send + Sync {
 
 impl<T> ActionServerBase for ActionServer<T> 
 where T: rosidl_runtime_rs::Action {
+
     fn handle(&self) -> &ActionServerHandle {
         &self.handle
     }
+
     fn execute(&self) -> Result<(), RclrsError> {
         if self.goal_request_ready.load(Ordering::SeqCst) {
             self.execute_goal_request_received()
@@ -724,6 +726,7 @@ where T: rosidl_runtime_rs::Action {
             panic!("Executing action server but nothing is ready")
         }
     }
+    
     // fn set_goal_request_ready(&self, value: bool) -> () {
     //     self.goal_request_ready.store(value, Ordering::SeqCst)
     // }
@@ -751,9 +754,8 @@ where T: rosidl_runtime_rs::Action {
                 &cancel_request_ready,
                 &result_request_ready,
                 &goal_expired
-            );
-        }
-        .ok()?;
+            )
+        };
 
         self.goal_request_ready.store(goal_request_ready, Ordering::SeqCst);
         self.cancel_request_ready.store(cancel_request_ready, Ordering::SeqCst);
@@ -781,8 +783,8 @@ impl CancelRequestHandle {
         }
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_response_t> {
-        self.rcl_action_cancel_request_mtx.lock().unwrap();
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_request_t> {
+        self.rcl_action_cancel_request_mtx.lock().unwrap()
     }
 }
 
@@ -799,13 +801,13 @@ impl CancelResponseHandle {
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_response_t> {
-        self.rcl_action_cancel_response_mtx.lock().unwrap();
+        self.rcl_action_cancel_response_mtx.lock().unwrap()
     }
 }
 
 impl Drop for CancelResponseHandle {
     fn drop(&mut self) {
-        let cancel_response = &mut *self.lock().unwrap();
+        let cancel_response = &mut *self.rcl_action_cancel_response_mtx.get_mut().unwrap();
         unsafe {
             rcl_action_cancel_response_fini(cancel_response);
         }

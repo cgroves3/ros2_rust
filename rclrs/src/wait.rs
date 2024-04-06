@@ -474,8 +474,7 @@ impl WaitSet {
             // SAFETY: The `servers` entry is an array of pointers, and this dereferencing is
             // equivalent to
             // https://github.com/ros2/rcl/blob/35a31b00a12f259d492bf53c0701003bd7f1745c/rcl/include/rcl/wait.h#L419
-            let wait_set_entry = unsafe { *self.rcl_wait_set.servers.add(i) };
-            if !wait_set_entry.is_null() && server.waitable.is_ready() {
+            if server.waitable.is_ready() {
                 ready_entities.servers.push(Arc::clone(&server.waitable));
             }
         }
