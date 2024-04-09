@@ -655,7 +655,9 @@ where
                     CancelResponse::Accept => {
                         let result = handle.cancel_goal();
                         if result.is_err() {
-                            return CancelResponse::Reject;
+                            CancelResponse::Reject
+                        } else {
+                            CancelResponse::Accept
                         }
                     }
                     CancelResponse::Reject => CancelResponse::Reject,
@@ -673,7 +675,7 @@ pub struct GoalInfoHandle {
 
 impl GoalInfoHandle {
     pub fn new(rcl_action_server: Arc<ActionServerHandle>) -> Self {
-        let mut goal_info = unsafe { rcl_action_get_zero_initialized_goal_info };
+        let mut goal_info = unsafe { rcl_action_get_zero_initialized_goal_info() };
         Self {
             rcl_action_goal_info_mtx: Mutex::new(goal_info),
             rcl_action_server,
@@ -740,7 +742,7 @@ where T: rosidl_runtime_rs::Action {
     //     self.goal_expired.store(value, Ordering::SeqCst)
     // }
 
-    fn is_ready(&self) -> bool {
+    fn is_ready(&self, wait_set: rcl_wait_set) -> bool {
         let mut goal_request_ready = false;
         let mut cancel_request_ready = false;
         let mut result_request_ready = false;
@@ -748,12 +750,12 @@ where T: rosidl_runtime_rs::Action {
 
         unsafe {
             rcl_action_server_wait_set_get_entities_ready(
-                &mut self.rcl_wait_set,
+                &mut wait_set,
                 &*self.handle().lock() as *const _,
-                &goal_request_ready,
-                &cancel_request_ready,
-                &result_request_ready,
-                &goal_expired
+                &mut goal_request_ready,
+                &mut gcancel_request_ready,
+                &mut gresult_request_ready,
+                &mut goal_expired
             )
         };
 
