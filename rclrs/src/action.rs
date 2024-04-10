@@ -128,7 +128,7 @@ where
     }
 
     //TODO: Is `result` needed for these methods?
-    pub fn abort(&self, result: &T::Result) -> Result<(), RclrsError> {
+    pub fn abort(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe { 
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
@@ -137,7 +137,7 @@ where
         Ok(())
     }
 
-    pub fn succeed(&self, result: &T::Result) -> Result<(), RclrsError> {
+    pub fn succeed(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
@@ -146,7 +146,7 @@ where
         Ok(())
     }
 
-    pub fn cancel_goal(&self, result: &T::Result) -> Result<(), RclrsError> {
+    pub fn cancel_goal(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
@@ -155,7 +155,7 @@ where
         Ok(())
     }
 
-    pub fn canceled(&self, result: &T::Result) -> Result<(), RclrsError> {
+    pub fn canceled(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
@@ -548,7 +548,7 @@ where
             //TODO: set this to unknown
             let mut result_response = ResultResponse::<T>::default();
             unsafe {
-                rcl_action_send_result_response(handle, &mut req_id, result_response);
+                rcl_action_send_result_response(handle, &mut req_id, result_response)
             }
             .ok()?;
         } else {
@@ -565,7 +565,7 @@ where
                 }
             }
         }
-        Okay(())
+        Ok(())
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
@@ -582,6 +582,7 @@ where
                 { self.goal_handles.lock().unwrap() }.remove(goal_uuid);
             }
         }
+        Ok(())
     }
 
     pub fn publish_status(&self) -> Result<(), RclrsError> {
@@ -590,6 +591,7 @@ where
         let handle = &*self.handle.lock();
         unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, num_goals) }.ok()?;
         let goal_status_array = Arc::new(GoalStatusArray::default());
+        let goal_status_array_ptr = &*goal_status_array;
         goal_status_array.reserve(num_goals);
         let mut status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
         unsafe { rcl_action_get_goal_status_array(handle, &mut status_array) }.ok()?;
@@ -603,7 +605,8 @@ where
             goal_status.uuid = status_msg.goal_info.uuid;
             goal_status_array.status_list.append(goal_status);
         }
-        unsafe { rcl_action_publish_status(handle, goal_status_array) }.ok()?;
+        unsafe { rcl_action_publish_status(handle, goal_status_array_ptr) }.ok()?;
+        Ok(())
     }
 
     pub fn accept_new_goal(
@@ -611,46 +614,51 @@ where
         goal_info: GoalInfoHandle,
         goal_req: Arc<T>,
     ) -> Result<rcl_action_goal_handle_t, RclrsError> {
-        let handle = &*self.handle.lock();
-        let goal_info_handle = &goal_info.lock();
-        let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle).ok()? }
-        Okay()
+        let handle = self.handle().rcl_action_server_mtx.get_mut().unwrap();
+        let goal_info_handle = goal_info.rcl_action_goal_info_mtx.get_mut().unwrap();
+        let goal_handle = unsafe { rcl_action_accept_new_goal(handle, goal_info_handle) };
+        Ok(*goal_handle)
     }
 
     pub fn publish_result(&self, goal_uuid: GoalUUID, result: T::Result) -> Result<(), RclrsError> {
         let goal_info = GoalInfoHandle::new(self.handle);
         goal_info.lock().goal_id.uuid = goal_uuid;
         let server_handle = &*self.handle.lock();
-        let goal_info_handle = &goal_info.lock();
-        let goal_exists =
-            unsafe { rcl_action_server_goal_exists(server_handle, goal_info_handle).ok()? };
+        let goal_info_handle = &*goal_info.lock();
+        let goal_exists = unsafe { rcl_action_server_goal_exists(server_handle, goal_info_handle) };
         if !goal_exists {
             panic!("Asked to publish result for goal that does not exist");
         }
-
+        let result_out = &result;
         { self.goal_results.lock().unwrap() }.insert(goal_uuid, result);
-
-        if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get(goal_uuid) {
+        let result_rmw_message = <T::Result as Message>::into_rmw_message(result.into_cow());
+        if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid) {
             for req_id in req_ids {
                 unsafe {
-                    rcl_action_send_result_response(server_handle, req_id, result).ok()?;
-                }
+                    rcl_action_send_result_response(
+                        server_handle, 
+                        req_id as *mut _, 
+                        result_rmw_message.as_ref() as *const <T::Result as Message>::RmwMsg as *mut _,
+                    )
+                }.ok()?;
             }
         }
+        Ok(())
     }
 
     pub fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_notify_goal_done(handle)
-        }.ok()?
+        }.ok()?;
+        Ok(())
     }
 
     pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
-        let goal_handle_option = { self.goal_handles.lock().unwrap() }.get(goal_uuid);
+        let goal_handle_option = { self.goal_handles.lock().unwrap() }.get(&goal_uuid);
         match goal_handle_option {
             Some(handle) => {
-                let cancel_cb_response = (self.handle_cancel_cb.lock().unwrap())(handle);
+                let cancel_cb_response = (self.handle_cancel_cb)(handle.clone());
                 match cancel_cb_response {
                     CancelResponse::Accept => {
                         let result = handle.cancel_goal();
@@ -705,7 +713,7 @@ pub trait ActionServerBase: Send + Sync {
     // /// Sets the goal expired state to value
     // fn set_goal_expired(&self, value: bool) -> ();
 
-    fn is_ready(&self) -> bool;
+    fn is_ready(&self, wait_set: rcl_wait_set) -> bool;
 }
 
 impl<T> ActionServerBase for ActionServer<T> 
