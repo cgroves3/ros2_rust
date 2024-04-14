@@ -573,14 +573,13 @@ where
         let mut num_expired: usize = 1;
         while num_expired > 0 {
             let handle = &*self.handle.lock();
-            let goal_info = &mut *goal_info_handle.lock();
-            unsafe { rcl_action_expire_goals(handle, goal_info, 1, &mut num_expired) }.ok()?;
+            unsafe { rcl_action_expire_goals(handle, &mut *goal_info_handle.lock(), 1, &mut num_expired) }.ok()?;
             if num_expired > 0 {
                 // TODO: Convert the expired goal_info uuid to a uuid
-                let goal_uuid = goal_info.goal_id;
-                { self.goal_results.lock().unwrap() }.remove(goal_uuid);
-                { self.result_requests.lock().unwrap() }.remove(goal_uuid);
-                { self.goal_handles.lock().unwrap() }.remove(goal_uuid);
+                let goal_uuid = goal_info_handle.lock().goal_id;
+                { self.goal_results.lock().unwrap() }.remove(&goal_uuid);
+                { self.result_requests.lock().unwrap() }.remove(&goal_uuid);
+                { self.goal_handles.lock().unwrap() }.remove(&goal_uuid);
             }
         }
         Ok(())
