@@ -543,25 +543,25 @@ where
 
         let handle = self.handle.lock().unwrap();
         let mut goal_exists = unsafe { rcl_action_server_goal_exists(handle, goal_info_handle) };
+        type ResultResponse<T> = <<<T as rosidl_runtime_rs::Action>::GetResultService as rosidl_runtime_rs::Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
         if !goal_exists {
-            type ResultResponse<T> = <<<T as rosidl_runtime_rs::Action>::GetResultService as rosidl_runtime_rs::Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
             //TODO: set this to unknown
             let mut result_response = ResultResponse::<T>::default();
             unsafe {
-                rcl_action_send_result_response(handle, &mut req_id, result_response)
+                rcl_action_send_result_response(handle, &mut req_id, &mut *result_response as *mut ResultResponse<T>::RmwMsg as *mut _)
             }
             .ok()?;
         } else {
             if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(goal_uuid)
             {
                 unsafe {
-                    rcl_action_send_result_response(handle, &mut req_id, result_response)
+                    rcl_action_send_result_response(handle, &mut req_id, &mut result_response as *mut ResultResponse<T>::RmwMsg as *mut _)
                 }
                 .ok()?;
             } else {
                 if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(goal_uuid)
                 {
-                    request_headers.push_back(req_id);
+                    request_headers.push(req_id);
                 }
             }
         }
@@ -569,14 +569,15 @@ where
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
-        let mut goal_info_handle = &*GoalInfoHandle::new(self.handle);
-        let mut num_expired: &*mut u32 = &1;
+        let mut goal_info_handle = GoalInfoHandle::new(self.handle);
+        let mut num_expired: usize = 1;
         while num_expired > 0 {
-            let handle = self.handle.lock().unwrap();
-            unsafe { rcl_action_expire_goals(handle, goal_info_handle, 1, num_expired) }.ok()?;
+            let handle = &*self.handle.lock();
+            let goal_info = &mut *goal_info_handle.lock();
+            unsafe { rcl_action_expire_goals(handle, goal_info, 1, &mut num_expired) }.ok()?;
             if num_expired > 0 {
                 // TODO: Convert the expired goal_info uuid to a uuid
-                let goal_uuid = goal_info_handle.uuid;
+                let goal_uuid = goal_info.goal_id;
                 { self.goal_results.lock().unwrap() }.remove(goal_uuid);
                 { self.result_requests.lock().unwrap() }.remove(goal_uuid);
                 { self.goal_handles.lock().unwrap() }.remove(goal_uuid);
@@ -589,23 +590,29 @@ where
         let mut num_goals: usize = 0;
         let mut goal_handles = std::ptr::null_mut();
         let handle = &*self.handle.lock();
-        unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, num_goals) }.ok()?;
+        unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, &mut num_goals) }.ok()?;
         let goal_status_array = Arc::new(GoalStatusArray::default());
-        let goal_status_array_ptr = &*goal_status_array;
-        goal_status_array.reserve(num_goals);
-        let mut status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
-        unsafe { rcl_action_get_goal_status_array(handle, &mut status_array) }.ok()?;
-        unsafe { rcl_action_goal_status_array_fini(&mut status_array) }.ok()?;
-        for i in 0..status_array.msg.status_list.len() {
-            let status_msg = status_array.msg.status_list[i];
+        let goal_status_array_rmw_msg = <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(goal_status_array.into_cow());
+        goal_status_array.status_list.reserve(num_goals);
+        let mut c_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
+        unsafe { rcl_action_get_goal_status_array(handle, &mut c_status_array) }.ok()?;
+        unsafe { rcl_action_goal_status_array_fini(&mut c_status_array) }.ok()?;
+        let status_array_slice = slice::from_raw_parts( c_status_array.msg.status_list.data, c_status_array.msg.status_list.size);
+        for i in 0..status_array_slice.len() {
+            let status_msg = status_array_slice[i];
 
             let goal_status = GoalStatus::default();
             goal_status.status = status_msg.status;
             goal_status.goal_info.stamp = status_msg.stamp;
-            goal_status.uuid = status_msg.goal_info.uuid;
-            goal_status_array.status_list.append(goal_status);
+            goal_status.goal_info.goal_id.uuid = status_msg.goal_info.goal_id;
+            goal_status_array.status_list.push(goal_status);
         }
-        unsafe { rcl_action_publish_status(handle, goal_status_array_ptr) }.ok()?;
+        unsafe { 
+            rcl_action_publish_status(
+                handle, 
+                goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg as *mut _
+            ) 
+        }.ok()?;
         Ok(())
     }
 
