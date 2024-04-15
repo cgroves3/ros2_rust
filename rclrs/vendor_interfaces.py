@@ -26,7 +26,6 @@ def adjust(pkg, text):
   text = text.replace('unique_identifier_msgs::', 'crate::vendor::unique_identifier_msgs::')
   text = text.replace('crate::msg', f'crate::vendor::{pkg}::msg')
   text = text.replace('crate::srv', f'crate::vendor::{pkg}::srv')
-  # TODO: Is this needed for actions as well?
   return text
 
 def copy_adjusted(pkg, src, dst):
