@@ -161,6 +161,19 @@ pub trait Service: 'static {
     fn get_type_support() -> *const std::os::raw::c_void;
 }
 
+// pub trait SendGoalServiceRequestMessage : Message {
+//     goal_id: unique_identifier_msgs__msg__UUID;
+// }
+
+// pub trait SendGoalServiceResponseMessage : Message {
+//     accepted: bool;
+// }
+
+// pub trait SendGoalService : Service {
+//     type Request = SendGoalServiceRequestMessage;
+//     type Response = SendGoalServiceResponseMessage;   
+// }
+
 /// Trait for actions.
 ///
 /// User code never needs to call this trait's method, much less implement this trait.
