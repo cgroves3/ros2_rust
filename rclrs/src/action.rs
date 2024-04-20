@@ -68,7 +68,7 @@ where
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    on_terminal_state: Box<dyn Fn(GoalUUID, <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError>>,
+    on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
     publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
 }
@@ -84,7 +84,7 @@ where
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        on_terminal_state: Box<dyn Fn(GoalUUID, <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError>>,
+        on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
         on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
         publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
     ) -> Self {
@@ -220,7 +220,7 @@ where
     T: rosidl_runtime_rs::Action,
 {
     pub(crate) goal_handles: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
-    pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, <T::GetResult as GetResultService>::Response>>>,
+    pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
@@ -448,7 +448,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
-        let on_terminal_state = |uuid: GoalUUID, result: <T::GetResult as GetResultService>::Response| -> Result<(), RclrsError> {
+        let on_terminal_state = |uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
             self.publish_result(uuid, result);
             self.publish_status();
             self.notify_goal_terminal_state();
@@ -645,7 +645,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         Ok(())
     }
 
-    pub fn publish_result(&self, goal_uuid: GoalUUID, result: <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError> {
+    pub fn publish_result(&self, goal_uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> {
         let goal_info = GoalInfoHandle::new(self.handle);
         goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
         let server_handle = &*self.handle.lock();
@@ -654,21 +654,28 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         if !goal_exists {
             panic!("Asked to publish result for goal that does not exist");
         }
-        { self.goal_results.lock().unwrap() }.insert(goal_uuid.clone(), result);
-        
-        let result_rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(result.into_cow());
-        if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid) {
-            type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
-            for req_id in req_ids {
-                unsafe {
-                    rcl_action_send_result_response(
-                        server_handle, 
-                        req_id as *mut _, 
-                        result_rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
-                    )
-                }.ok()?;
+        { self.goal_results.lock().unwrap() }.insert(goal_uuid.clone(), result.clone());
+        match Arc::into_inner(result) {
+            Some(res) => {
+                let result_rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
+                if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid) {
+                    type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
+                    for req_id in req_ids {
+                        unsafe {
+                            rcl_action_send_result_response(
+                                server_handle, 
+                                req_id as *mut _, 
+                                result_rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
+                            )
+                        }.ok()?;
+                    }
+                }
+            }
+            None => { 
+                return Err(RclrsError::RclError { code: crate::RclReturnCode::Error, msg: None });
             }
         }
+        
         Ok(())
     }
 
