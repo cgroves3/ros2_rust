@@ -627,7 +627,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         for i in 0..status_array_slice.len() {
             let status_msg = status_array_slice[i];
 
-            let goal_status = GoalStatus::default();
+            let mut goal_status = GoalStatus::default();
             goal_status.status = status_msg.status;
             goal_status.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time { 
                 sec: status_msg.goal_info.stamp.sec, 
