@@ -9,4 +9,4 @@ mod string;
 pub use string::{BoundedString, BoundedWString, String, StringExceedsBoundsError, WString};
 
 mod traits;
-pub use traits::{Action, GetResultService, HasGoalId, Message, RmwMessage, SequenceAlloc, SendGoalService, Service};
+pub use traits::{Action, GetResultService, HasGoal, HasGoalId, Message, RmwMessage, SequenceAlloc, SendGoalService, Service};

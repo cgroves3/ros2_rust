@@ -1,4 +1,4 @@
-use rosidl_runtime_rs::{Action, GetResultService, HasGoalId, Message, SendGoalService, Service};
+use rosidl_runtime_rs::{Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service};
 
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
@@ -68,7 +68,7 @@ where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
-    goal_request: Arc<<<T as Action>::SendGoal as SendGoalService>::Request>,
+    goal: Arc<<T as Action>::Goal>,
     on_terminal_state: Box<dyn Fn(GoalUUID, <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError>>,
     on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
     publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
@@ -84,14 +84,14 @@ where
 {
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
-        goal_request: Arc<<<T as Action>::SendGoal as SendGoalService>::Request>,
+        goal: Arc<<T as Action>::Goal>,
         on_terminal_state: Box<dyn Fn(GoalUUID, <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError>>,
         on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
         publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
     ) -> Self {
         Self {
             handle,
-            goal_request: Arc::clone(&goal_request),
+            goal: Arc::clone(&goal),
             on_terminal_state,
             on_executing,
             publish_feedback_cb
@@ -110,7 +110,7 @@ where
     }
 
     pub fn get_goal(&self) -> Arc<T::Goal> {
-        self.goal_request
+        self.goal
     }
 
     pub fn is_canceling(&self) -> bool {
@@ -397,10 +397,10 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Err(e) => return Err(e),
         };
 
-        let uuid = GoalUUID([0; RCL_ACTION_UUID_SIZE]);
-        // let goal_request_msg = goal_request.
-        //TODO: Use the uuid of the goal_request
-        let user_response = (self.handle_goal_cb)(&uuid, goal_request);
+        
+        let goal = Arc::new(goal_request.get_goal());
+        let uuid = GoalUUID(goal_request.get_goal_id());
+        let user_response = (self.handle_goal_cb)(&uuid, goal);
 
         type RmwMsg<T> = <<<T as Action>::SendGoal as Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
         let goal_response = RmwMsg::<T>::default();
@@ -471,7 +471,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
 
         let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
-            Arc::new(goal_request),
+            Arc::new(goal_request.get_goal()),
             Box::new(on_terminal_state),
             Box::new(on_executing),
             Box::new(publish_feedback),

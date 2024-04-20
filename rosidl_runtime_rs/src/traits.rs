@@ -166,10 +166,24 @@ pub trait HasGoalId {
     fn get_goal_id(&self) -> [u8; 16];
 }
 
+// /// Trait for having a goal id
+// pub trait HasGoal {
+//     /// Method to get the goal id.
+//     fn get_goal(&self) -> Action;
+// }
+
+// /// Trait for having a goal id
+// pub trait HasGoal {
+//     /// Method to get the goal id.
+//     fn get_goal(&self) -> Action::Goal;
+// }
+
 /// Trait for having a goal id
 pub trait HasGoal {
+    type Goal: Action;
+
     /// Method to get the goal id.
-    fn get_goal(&self) -> Action;
+    fn get_goal(&self) -> <Self::Goal as Action>::Goal;
 }
 
 /// Trait for Action's SendGoalService.
@@ -177,7 +191,7 @@ pub trait HasGoal {
 /// User code never needs to call this trait's method, much less implement this trait.
 pub trait SendGoalService : Service {
      /// The request message associated with this service.
-    type Request: Message + HasGoalId;
+    type Request: Message + HasGoalId + HasGoal;
 
     /// The response message associated with this service.
     type Response: Message;   
@@ -188,7 +202,7 @@ pub trait SendGoalService : Service {
 /// User code never needs to call this trait's method, much less implement this trait.
 pub trait GetResultService : Service {
      /// The request message associated with this service.
-    type Request: Message + HasGoalId;
+    type Request: Message + HasGoalId + HasGoal;
 
     /// The response message associated with this service.
     type Response: Message;   
