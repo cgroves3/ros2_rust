@@ -1,6 +1,5 @@
 use rosidl_runtime_rs::{Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service};
 
-use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
@@ -398,7 +397,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         };
 
         
-        let goal = Arc::new(goal_request.get_goal());
+        let goal = Arc::new(goal_request.get_goal::<T>());
         let uuid = GoalUUID(goal_request.get_goal_id());
         let user_response = (self.handle_goal_cb)(&uuid, goal);
 
@@ -471,7 +470,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
 
         let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
-            Arc::new(goal_request.get_goal()),
+            Arc::new(goal_request.get_goal::<T>()),
             Box::new(on_terminal_state),
             Box::new(on_executing),
             Box::new(publish_feedback),

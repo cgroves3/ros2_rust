@@ -166,11 +166,13 @@ pub trait HasGoalId {
     fn get_goal_id(&self) -> [u8; 16];
 }
 
-// /// Trait for having a goal id
-// pub trait HasGoal {
-//     /// Method to get the goal id.
-//     fn get_goal(&self) -> Action;
-// }
+pub type Goal<A> = <A as Action>::Goal;
+
+/// Trait for having a goal id
+pub trait HasGoal {
+    /// Method to get the goal id.
+    fn get_goal<A: Action>(&self) -> Goal<A>;
+}
 
 // /// Trait for having a goal id
 // pub trait HasGoal {
@@ -178,13 +180,13 @@ pub trait HasGoalId {
 //     fn get_goal(&self) -> Action::Goal;
 // }
 
-/// Trait for having a goal id
-pub trait HasGoal {
-    type Goal: Action;
+// /// Trait for having a goal id
+// pub trait HasGoal {
+//     type Goal: Action;
 
-    /// Method to get the goal id.
-    fn get_goal(&self) -> <Self::Goal as Action>::Goal;
-}
+//     /// Method to get the goal id.
+//     fn get_goal(&self) -> <Self::Goal as Action>::Goal;
+// }
 
 /// Trait for Action's SendGoalService.
 ///
