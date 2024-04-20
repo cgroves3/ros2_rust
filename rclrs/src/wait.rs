@@ -470,11 +470,8 @@ impl WaitSet {
             }
         }
 
-        for (i, server) in self.servers.iter().enumerate() {
-            // SAFETY: The `servers` entry is an array of pointers, and this dereferencing is
-            // equivalent to
-            // https://github.com/ros2/rcl/blob/35a31b00a12f259d492bf53c0701003bd7f1745c/rcl/include/rcl/wait.h#L419
-            if server.waitable.is_ready(self.rcl_wait_set) {
+        for (_, server) in self.servers.iter().enumerate() {
+            if server.waitable.is_ready(&mut self.rcl_wait_set) {
                 ready_entities.servers.push(Arc::clone(&server.waitable));
             }
         }
