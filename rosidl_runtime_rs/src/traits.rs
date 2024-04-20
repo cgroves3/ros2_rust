@@ -174,20 +174,6 @@ pub trait HasGoal {
     fn get_goal<A: Action>(&self) -> Goal<A>;
 }
 
-// /// Trait for having a goal id
-// pub trait HasGoal {
-//     /// Method to get the goal id.
-//     fn get_goal(&self) -> Action::Goal;
-// }
-
-// /// Trait for having a goal id
-// pub trait HasGoal {
-//     type Goal: Action;
-
-//     /// Method to get the goal id.
-//     fn get_goal(&self) -> <Self::Goal as Action>::Goal;
-// }
-
 /// Trait for Action's SendGoalService.
 ///
 /// User code never needs to call this trait's method, much less implement this trait.
