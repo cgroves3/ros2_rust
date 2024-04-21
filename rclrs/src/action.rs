@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
-use crate::error::{RclActionReturnCode, RclrsError, ToResult};
+use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
@@ -132,7 +132,7 @@ where
     }
 
     //TODO: Is `result` needed for these methods?
-    pub fn abort(&self) -> Result<(), RclrsError> {
+    pub fn _abort(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe { 
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
@@ -141,7 +141,7 @@ where
         Ok(())
     }
 
-    pub fn succeed(&self) -> Result<(), RclrsError> {
+    pub fn _succeed(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
@@ -150,7 +150,7 @@ where
         Ok(())
     }
 
-    pub fn cancel_goal(&self) -> Result<(), RclrsError> {
+    pub fn _cancel_goal(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
@@ -159,13 +159,46 @@ where
         Ok(())
     }
 
-    pub fn canceled(&self) -> Result<(), RclrsError> {
+    pub fn _canceled(&self) -> Result<(), RclrsError> {
         let handle = &mut *self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
         Ok(())
+    }
+
+    pub fn _execute(&self) -> Result<(), RclrsError> {
+        let handle = &mut *self.handle.lock();
+        unsafe {
+            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
+        }
+        .ok()?;
+        Ok(())
+    }
+
+    pub fn try_canceling(&self) -> bool {
+        let handle = &mut *self.handle.lock();
+        let is_cancelable = unsafe { rcl_action_goal_handle_is_cancelable(handle) };
+        if is_cancelable {
+            let ret = unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL) };
+            if !matches!(ret, RclReturnCode::Ok) {
+              return false;
+            }
+        }
+
+        // Default state is STATUS_UNKNOWN
+        match self.get_state() {
+            Ok(state) => {
+                if state == GoalStatus::STATUS_CANCELING {
+                    let ret = unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED) };
+                    return matches!(ret, RclReturnCode::Ok)
+                }
+            }
+            Err(_) => return false
+        }
+        
+        false
     }
 }
 
@@ -595,7 +628,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
-        let mut goal_info_handle = GoalInfoHandle::new(self.handle);
+        let mut goal_info_handle = GoalInfoHandle::new(self.handle.clone());
         let mut num_expired: usize = 1;
         while num_expired > 0 {
             let handle = &*self.handle.lock();
@@ -646,7 +679,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
     }
 
     pub fn publish_result(&self, goal_uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> {
-        let goal_info = GoalInfoHandle::new(self.handle);
+        let goal_info = GoalInfoHandle::new(self.handle.clone());
         goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
         let server_handle = &*self.handle.lock();
         let goal_info_handle = &*goal_info.lock();
@@ -695,7 +728,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 let cancel_cb_response = (self.handle_cancel_cb)(handle.clone());
                 match cancel_cb_response {
                     CancelResponse::Accept => {
-                        let result = handle.cancel_goal();
+                        let result = handle._cancel_goal();
                         if result.is_err() {
                             CancelResponse::Reject
                         } else {
