@@ -404,7 +404,7 @@ pub(crate) fn to_rclrs_result(ret: i32) -> Result<(), RclrsError> {
     // Finally, try to parse it into a return code.
     Err(match RclReturnCode::try_from(ret) {
         Ok(code) => RclrsError::RclError { code, msg },
-        Err(code) =>
+        Err(_code) =>
             match RclActionReturnCode::try_from(ret) {
                 Ok(code) => RclrsError::RclActionError { code, msg },
                 Err(code) => RclrsError::UnknownRclError { code, msg },
