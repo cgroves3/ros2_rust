@@ -450,7 +450,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         .ok()?;
 
         if matches!(user_response, GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer) {
-            let goal_info_handle = GoalInfoHandle::new(self.handle);
+            let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
             //TODO: Uncommment and fix
             // let uuid = goal_request.uuid;
             let uuid = GoalUUID(goal_request.get_goal_id());
@@ -539,34 +539,37 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             )
         }
         .ok()?;
-        let response = Arc::new(CancelGoal_Response::default());
-        response.return_code = response_handle.msg.return_code;
+        let response_mtx = Arc::new(Mutex::new(CancelGoal_Response::default()));
+        { response_mtx.lock().unwrap() }.return_code = response_handle.msg.return_code;
         let goals = unsafe { std::slice::from_raw_parts(response_handle.msg.goals_canceling.data, response_handle.msg.goals_canceling.size) };
 
         for i in 0..goals.len() {
-            let goal_info = goals[i];
-            let uuid = GoalUUID(goal_info.goal_id.uuid);
+            let goal_info = &goals[i];
+            let uuid = GoalUUID([0; RCL_ACTION_UUID_SIZE]);
+            uuid.0.copy_from_slice(&goal_info.goal_id.uuid);
             let cb_response_code = self.call_handle_cancel_callback(uuid);
             if matches!(CancelResponse::Accept, cb_response_code) {
                 let mut rs_goal_info = GoalInfo::default();
                 rs_goal_info.goal_id.uuid.clone_from_slice(&goal_info.goal_id.uuid);
                 //TODO: Set the timestamp for the rs_goal_info
-                response.goals_canceling.push(rs_goal_info);
+                { response_mtx.lock().unwrap() }.goals_canceling.push(rs_goal_info);
             }
         }
 
         // If the user rejects all individual requests to cancel goals,
         // then we consider the top-level cancel request as rejected.
-        if goals.len() >= 1 && 0 == response.goals_canceling.len() {
-            response.return_code = CancelResponse::Reject as i8;
+        if goals.len() >= 1 && 0 == response_mtx.goals_canceling.len() {
+            let owned = response_mtx.lock().unwrap();
+            owned.return_code = CancelResponse::Reject as i8;
         }
 
-        if !response.goals_canceling.is_empty() {
+        // Probably overkill
+        if !{ response_mtx.lock().unwrap() }.goals_canceling.is_empty() {
             // at least one goal state changed, publish a new status message
             self.publish_status();
         }
 
-        let rmw_message = <CancelGoal_Response as Message>::into_rmw_message(response.into_cow());
+        let rmw_message = <CancelGoal_Response as Message>::into_rmw_message(res.into_cow());
         unsafe {
             // SAFETY: The response type is guaranteed to match the service type by the type system.
             rcl_action_send_cancel_response(
@@ -576,6 +579,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             )
         }
         .ok()?;
+        
 
         Ok(())
     }
@@ -597,7 +601,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         // TODO: Convert the result_request uuid to a uuid
         // let goal_uuid = result_request.uuid;
         let goal_uuid = GoalUUID(result_request.get_goal_id());
-        let goal_info_handle = GoalInfoHandle::new(self.handle);
+        let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
 
         let handle = &*self.handle.lock();
         let goal_exists = unsafe { rcl_action_server_goal_exists(handle, &*goal_info_handle.lock()) };
@@ -610,19 +614,20 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             }
             .ok()?;
         } else {
-            if let Some(result_response) = { self.goal_results.lock().unwrap() }.get_mut(&goal_uuid)
+            if let Some(result_response) = { self.goal_results.lock().unwrap() }.remove(&goal_uuid)
             {
-                match Arc::into_inner(*result_response) {
+                match Arc::into_inner(result_response) {
                     Some(res) => {
-                        let mut rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
+                        let rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
                         unsafe {
-                            rcl_action_send_result_response(handle, &mut req_id, rmw_message.to_mut() as *mut RmwMsg<T> as *mut _)
+                            rcl_action_send_result_response(handle, &mut req_id, rmw_message.as_ref() as *const RmwMsg<T> as *mut _)
                         }
                         .ok()?;
+                        let sent_response = <<<T as Action>::GetResult as GetResultService>::Response as Message>::from_rmw_message(rmw_message.into_owned());
+                        { self.goal_results.lock().unwrap() }.insert(goal_uuid, Arc::new(sent_response));
                     }
                     None => {}
                 }
-
             } else {
                 if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
                 {
