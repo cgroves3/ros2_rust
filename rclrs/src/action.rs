@@ -46,24 +46,28 @@ pub enum CancelResponse {
     Accept = 2,
 }
 
-pub struct ServerGoalHandleHandle
-{
-    rcl_goal_handle_mtx: Mutex<rcl_action_goal_handle_t>
+pub struct ServerGoalHandleHandle {
+    rcl_goal_handle_mtx: Mutex<*mut rcl_action_goal_handle_t>
 }
 
 impl ServerGoalHandleHandle {
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_handle_t> {
+    pub fn new(goal_handle_mtx: Mutex<*mut rcl_action_goal_handle_t>) -> Self {
+        Self { 
+            rcl_goal_handle_mtx: goal_handle_mtx 
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<*mut rcl_action_goal_handle_t> {
         self.rcl_goal_handle_mtx.lock().unwrap()
     }
 }
 
-impl Drop for ServerGoalHandleHandle
-{
+impl Drop for ServerGoalHandleHandle {
     fn drop(&mut self) {
-        let goal_handle = &mut *self.rcl_goal_handle_mtx.lock().unwrap();
+        let goal_handle = self.lock();
         // SAFETY: No preconditions for this function (besides the arguments being valid).
         unsafe {
-            rcl_action_goal_handle_fini(goal_handle);
+            rcl_action_goal_handle_fini(*goal_handle);
         }
     }
 }
@@ -108,9 +112,9 @@ where
     }
 
     fn get_state(&self) -> Result<i8, RclrsError> {
-        let goal_handle = &*self.handle.lock();
+        let goal_handle = self.handle.lock();
         let mut state = &mut GoalStatus::STATUS_UNKNOWN;
-        unsafe { rcl_action_goal_handle_get_status(goal_handle, &mut *state) }.ok()?;
+        unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *state) }.ok()?;
         Ok(*state)
     }
 
@@ -126,8 +130,8 @@ where
     }
 
     pub fn is_active(&self) -> bool {
-        let handle = &*self.handle.lock();
-        unsafe { rcl_action_goal_handle_is_active(handle) }
+        let handle = self.handle.lock();
+        unsafe { rcl_action_goal_handle_is_active(*handle as *const _) }
     }
 
     pub fn is_executing(&self) -> bool {
@@ -139,55 +143,55 @@ where
 
     //TODO: Is `result` needed for these methods?
     pub fn _abort(&self) -> Result<(), RclrsError> {
-        let handle = &mut *self.handle.lock();
+        let handle = self.handle.lock();
         unsafe { 
-            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
         }
         .ok()?;
         Ok(())
     }
 
     pub fn _succeed(&self) -> Result<(), RclrsError> {
-        let handle = &mut *self.handle.lock();
+        let handle = self.handle.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
         }
         .ok()?;
         Ok(())
     }
 
     pub fn _cancel_goal(&self) -> Result<(), RclrsError> {
-        let handle = &mut *self.handle.lock();
+        let handle = self.handle.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
         }
         .ok()?;
         Ok(())
     }
 
     pub fn _canceled(&self) -> Result<(), RclrsError> {
-        let handle = &mut *self.handle.lock();
+        let handle = self.handle.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
         Ok(())
     }
 
     pub fn _execute(&self) -> Result<(), RclrsError> {
-        let handle = &mut *self.handle.lock();
+        let handle = self.handle.lock();
         unsafe {
-            rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
         }
         .ok()?;
         Ok(())
     }
 
     pub fn try_canceling(&self) -> bool {
-        let handle = &mut *self.handle.lock();
-        let is_cancelable = unsafe { rcl_action_goal_handle_is_cancelable(handle) };
+        let handle = self.handle.lock();
+        let is_cancelable = unsafe { rcl_action_goal_handle_is_cancelable(*handle) };
         if is_cancelable {
-            let ret = unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL) };
+            let ret = unsafe { rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL) };
             if ret != RclReturnCode::Ok as i32 {
               return false;
             }
@@ -197,7 +201,7 @@ where
         match self.get_state() {
             Ok(state) => {
                 if state == GoalStatus::STATUS_CANCELING {
-                    let ret = unsafe { rcl_action_update_goal_state(handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED) };
+                    let ret = unsafe { rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED) };
                     return ret == RclReturnCode::Ok as i32
                 }
             }
@@ -457,33 +461,50 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
 
         if matches!(user_response, GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer) {
             let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
-            //TODO: Uncommment and fix
-            // let uuid = goal_request.uuid;
             let uuid = GoalUUID::new(goal_request.get_goal_id());
             goal_info_handle.lock().goal_id.uuid.copy_from_slice(&uuid.0);
             
-            let mut_handle = &mut *self.handle.lock();
-            let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
-            let mut goal_handle_ptr = unsafe { rcl_action_accept_new_goal(mut_handle, goal_info) };
-                
+            let goal_handle_handle = self.accept_new_goal(goal_info_handle);
+            // let mut_handle = &mut *self.handle.lock();
+            // let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
+            // unsafe { 
+            //     let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
+
+            //     let goal_handle_handle = ServerGoalHandleHandle {
+            //         rcl_goal_handle_mtx: Mutex::new(*goal_handle_raw_ptr)
+            //     };
+            // }
+            
+            
 
             // TODO: rclcpp also inserts into a map of GoalUUID and rcl_action_goal_handle_t pairs for some reason. Unsure if this is needed
             if matches!(user_response, GoalResponse::AcceptAndExecute) {
+                let goal_handle = goal_handle_handle.lock();
                 unsafe {
-                    rcl_action_update_goal_state(goal_handle_ptr, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
+                    rcl_action_update_goal_state(*goal_handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
                 }
                 .ok()?;
             }
             self.publish_status()?;
-            let goal_handle = unsafe { *goal_handle_ptr };
-            self.call_goal_accepted_cb(goal_handle, uuid, goal_request);
+            self.call_goal_accepted_cb(goal_handle_handle, uuid, goal_request);
         }
         Ok(())
     }
 
+    pub fn accept_new_goal(&self, goal_info_handle: GoalInfoHandle) -> ServerGoalHandleHandle {
+        let mut_handle = &mut *self.handle.lock();
+            let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
+            unsafe { 
+                let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
+                ServerGoalHandleHandle::new(
+                    Mutex::new(goal_handle_raw_ptr)
+                )
+            }
+    }
+
     pub fn call_goal_accepted_cb(
         &self,
-        goal_handle: rcl_action_goal_handle_t,
+        goal_handle_handle: ServerGoalHandleHandle,
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
@@ -504,10 +525,6 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
 
         let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
             self.publish_feedback(feedback_msg)
-        };
-
-        let goal_handle_handle = ServerGoalHandleHandle {
-            rcl_goal_handle_mtx: Mutex::new(goal_handle)
         };
 
         let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
