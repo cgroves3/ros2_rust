@@ -27,6 +27,12 @@ use std::marker::PhantomData;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct GoalUUID([u8; RCL_ACTION_UUID_SIZE]);
 
+impl GoalUUID {
+    pub fn new(uuid: [u8; RCL_ACTION_UUID_SIZE]) -> Self {
+        Self(uuid)
+    }
+}
+
 // type GetResultResponse<T> = <<T as rosidl_runtime_rs::Action>::GetResult as rosidl_runtime_rs::Service>::Response;
 // type GetResultRequest<T> = <<T as rosidl_runtime_rs::Action>::GetResult as rosidl_runtime_rs::Service>::Request;
 
@@ -252,7 +258,7 @@ pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
+    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
     pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
@@ -322,7 +328,7 @@ where
         });
 
         Ok(Self {
-            goal_handles: Arc::new(Mutex::new(HashMap::new())),
+            goal_handles_mtx: Arc::new(Mutex::new(HashMap::new())),
             goal_results: Arc::new(Mutex::new(HashMap::new())),
             result_requests: Arc::new(Mutex::new(HashMap::new())),
             handle,
@@ -431,7 +437,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
 
         
         let goal = Arc::new(goal_request.get_goal::<T>());
-        let uuid = GoalUUID(goal_request.get_goal_id());
+        let uuid = GoalUUID::new(goal_request.get_goal_id());
         let user_response = (self.handle_goal_cb)(&uuid, goal);
 
         type RmwMsg<T> = <<<T as Action>::SendGoal as Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
@@ -453,23 +459,23 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
             //TODO: Uncommment and fix
             // let uuid = goal_request.uuid;
-            let uuid = GoalUUID(goal_request.get_goal_id());
+            let uuid = GoalUUID::new(goal_request.get_goal_id());
             goal_info_handle.lock().goal_id.uuid.copy_from_slice(&uuid.0);
             
             let mut_handle = &mut *self.handle.lock();
             let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
-            let mut new_goal_handle_ptr = unsafe { rcl_action_accept_new_goal(mut_handle, goal_info) };
+            let mut goal_handle_ptr = unsafe { rcl_action_accept_new_goal(mut_handle, goal_info) };
                 
 
             // TODO: rclcpp also inserts into a map of GoalUUID and rcl_action_goal_handle_t pairs for some reason. Unsure if this is needed
             if matches!(user_response, GoalResponse::AcceptAndExecute) {
                 unsafe {
-                    rcl_action_update_goal_state(new_goal_handle_ptr, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
+                    rcl_action_update_goal_state(goal_handle_ptr, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
                 }
                 .ok()?;
             }
             self.publish_status()?;
-            let goal_handle = unsafe { *new_goal_handle_ptr };
+            let goal_handle = unsafe { *goal_handle_ptr };
             self.call_goal_accepted_cb(goal_handle, uuid, goal_request);
         }
         Ok(())
@@ -482,10 +488,13 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
         let on_terminal_state = |uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
-            self.publish_result(uuid, result);
+            self.publish_result(&uuid, result);
             self.publish_status();
             self.notify_goal_terminal_state();
-            { self.goal_handles.lock().unwrap() }.remove(&uuid);
+            { 
+                let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                goal_handles.remove(&uuid);
+            }
             Ok(())
         };
 
@@ -508,7 +517,10 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Box::new(on_executing),
             Box::new(publish_feedback),
         ));
-        { self.goal_handles.lock().unwrap() }.insert(goal_uuid, goal_handle_arc);
+        { 
+            let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+            goal_handles.insert(goal_uuid, goal_handle_arc.clone());
+        }
         (self.handle_accepted_cb)(goal_handle_arc);
     }
 
@@ -527,7 +539,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         };
         //TODO: Set the goal uuid and timestamp for the cancel request
         let cancel_request_handle = CancelRequestHandle::new();
-        let mut cancel_response_handle = CancelResponseHandle::new();
+        let cancel_response_handle = CancelResponseHandle::new();
         let handle = &*self.handle.lock();
         let request_handle = &*cancel_request_handle.lock();
         let response_handle = &mut *cancel_response_handle.lock();
@@ -540,43 +552,55 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         }
         .ok()?;
         let response_mtx = Arc::new(Mutex::new(CancelGoal_Response::default()));
-        { response_mtx.lock().unwrap() }.return_code = response_handle.msg.return_code;
+        {
+            let mut response = response_mtx.lock().unwrap();
+            response.return_code = response_handle.msg.return_code;
+        }
         let goals = unsafe { std::slice::from_raw_parts(response_handle.msg.goals_canceling.data, response_handle.msg.goals_canceling.size) };
 
         for i in 0..goals.len() {
             let goal_info = &goals[i];
-            let uuid = GoalUUID([0; RCL_ACTION_UUID_SIZE]);
+            let mut uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
             uuid.0.copy_from_slice(&goal_info.goal_id.uuid);
             let cb_response_code = self.call_handle_cancel_callback(uuid);
             if matches!(CancelResponse::Accept, cb_response_code) {
                 let mut rs_goal_info = GoalInfo::default();
                 rs_goal_info.goal_id.uuid.clone_from_slice(&goal_info.goal_id.uuid);
                 //TODO: Set the timestamp for the rs_goal_info
-                { response_mtx.lock().unwrap() }.goals_canceling.push(rs_goal_info);
+                { 
+                    let mut response = response_mtx.lock().unwrap();
+                    response.goals_canceling.push(rs_goal_info);
+                }
             }
         }
 
         // If the user rejects all individual requests to cancel goals,
         // then we consider the top-level cancel request as rejected.
-        if goals.len() >= 1 && 0 == response_mtx.goals_canceling.len() {
-            let owned = response_mtx.lock().unwrap();
-            owned.return_code = CancelResponse::Reject as i8;
+        {
+            let mut response = response_mtx.lock().unwrap();
+            if goals.len() >= 1 && 0 == response.goals_canceling.len() {
+                response.return_code = CancelResponse::Reject as i8;
+            }
+            
+            // Probably overkill
+            if !response.goals_canceling.is_empty() {
+                // at least one goal state changed, publish a new status message
+                self.publish_status();
+            }
         }
 
-        // Probably overkill
-        if !{ response_mtx.lock().unwrap() }.goals_canceling.is_empty() {
-            // at least one goal state changed, publish a new status message
-            self.publish_status();
-        }
-
-        let rmw_message = <CancelGoal_Response as Message>::into_rmw_message(res.into_cow());
-        unsafe {
-            // SAFETY: The response type is guaranteed to match the service type by the type system.
-            rcl_action_send_cancel_response(
-                handle,
-                &mut req_id,
-                rmw_message.as_ref() as *const <CancelGoal_Response as Message>::RmwMsg as *mut _,
-            )
+        {
+            let response = response_mtx.lock().unwrap();
+            let response_cow = response.clone().into_cow();
+            let rmw_message = <CancelGoal_Response as Message>::into_rmw_message(response_cow);
+            unsafe {
+                // SAFETY: The response type is guaranteed to match the service type by the type system.
+                rcl_action_send_cancel_response(
+                    handle,
+                    &mut req_id,
+                    rmw_message.as_ref() as *const <CancelGoal_Response as Message>::RmwMsg as *mut _,
+                )
+            }
         }
         .ok()?;
         
@@ -600,7 +624,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         self.result_request_ready.store(false, Ordering::SeqCst);
         // TODO: Convert the result_request uuid to a uuid
         // let goal_uuid = result_request.uuid;
-        let goal_uuid = GoalUUID(result_request.get_goal_id());
+        let goal_uuid = GoalUUID::new(result_request.get_goal_id());
         let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
 
         let handle = &*self.handle.lock();
@@ -646,11 +670,11 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             unsafe { rcl_action_expire_goals(handle, &mut *goal_info_handle.lock(), 1, &mut num_expired) }.ok()?;
             if num_expired > 0 {
                 // TODO: Convert the expired goal_info uuid to a uuid
-                let mut goal_uuid = GoalUUID([0; RCL_ACTION_UUID_SIZE]);
+                let mut goal_uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
                 goal_uuid.0.copy_from_slice(&goal_info_handle.lock().goal_id.uuid);
                 { self.goal_results.lock().unwrap() }.remove(&goal_uuid);
                 { self.result_requests.lock().unwrap() }.remove(&goal_uuid);
-                { self.goal_handles.lock().unwrap() }.remove(&goal_uuid);
+                { self.goal_handles_mtx.lock().unwrap() }.remove(&goal_uuid);
             }
         }
         Ok(())
@@ -689,7 +713,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         Ok(())
     }
 
-    pub fn publish_result(&self, goal_uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> {
+    pub fn publish_result(&self, goal_uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> {
         let goal_info = GoalInfoHandle::new(self.handle.clone());
         goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
         let server_handle = &*self.handle.lock();
@@ -732,7 +756,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
     }
 
     pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
-        let binding = { self.goal_handles.lock().unwrap() };
+        let binding = { self.goal_handles_mtx.lock().unwrap() };
         let goal_handle_option = binding.get(&goal_uuid);
         match goal_handle_option {
             Some(handle) => {
