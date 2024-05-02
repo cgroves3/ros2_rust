@@ -72,31 +72,31 @@ impl Drop for ServerGoalHandleHandle {
     }
 }
 
-pub struct ServerGoalHandle<T>
+pub struct ServerGoalHandle<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-    on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
-    publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
+    on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
+    publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>
 }
 
-unsafe impl<T> Send for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
 
-unsafe impl<T> Sync for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Sync for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
 
-impl<T> ServerGoalHandle<T>
+impl<'a, T> ServerGoalHandle<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-        on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
-        publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
+        on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+        on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
+        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
     ) -> Self {
         Self {
             handle,
@@ -258,24 +258,24 @@ impl Drop for ActionServerHandle {
     }
 }
 
-pub struct ActionServer<T>
+pub struct ActionServer<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
+    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<'a, T>>>>>,
     pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
-    handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-    handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+    handle_cancel_cb: fn(Arc<ServerGoalHandle<'a, T>>) -> CancelResponse,
+    handle_accepted_cb: fn(Arc<ServerGoalHandle<'a, T>>),
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
     goal_expired: Arc<AtomicBool>
 }
 
-impl<T> ActionServer<T>
+impl<'a, T> ActionServer<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
@@ -286,8 +286,8 @@ where
         clock: Clock,
         qos: QoSProfile,
         handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-        handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+        handle_cancel_cb: fn(Arc<ServerGoalHandle<'a, T>>) -> CancelResponse,
+        handle_accepted_cb: fn(Arc<ServerGoalHandle<'a, T>>),
     ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
@@ -508,7 +508,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
-        let on_terminal_state = |uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
+        let on_terminal_state = &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
             self.publish_result(&uuid, result);
             self.publish_status();
             self.notify_goal_terminal_state();
@@ -519,20 +519,20 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Ok(())
         };
 
-        let on_executing = |uuid: GoalUUID| -> Result<(), RclrsError> {
+        let on_executing = &|uuid: GoalUUID| -> Result<(), RclrsError> {
             self.publish_status()
         };
 
-        let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
+        let publish_feedback = &|feedback_msg: T::Feedback| -> Result<(), RclrsError> {
             self.publish_feedback(feedback_msg)
         };
 
         let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
-            Box::new(on_terminal_state),
-            Box::new(on_executing),
-            Box::new(publish_feedback),
+            on_terminal_state,
+            on_executing,
+            publish_feedback,
         ));
         { 
             let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
