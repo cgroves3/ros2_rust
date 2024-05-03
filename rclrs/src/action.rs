@@ -72,38 +72,48 @@ impl Drop for ServerGoalHandleHandle {
     }
 }
 
-pub struct ServerGoalHandle<'a, T>
+type TerminalStateCallback<Response> = Box<dyn Fn(GoalUUID, Arc<Response>) -> Result<(), RclrsError>>;
+type ExecutingCallback = Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>;
+type PublishFeedbackCallback<Feedback> = Box<dyn Fn(Feedback) -> Result<(), RclrsError>>;
+
+pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
-    on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
-    publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>
+    on_terminal_state: TerminalStateCallback<<T::GetResult as GetResultService>::Response>,
+    on_executing: ExecutingCallback,
+    publish_feedback_cb: PublishFeedbackCallback<T::Feedback>
 }
 
-unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Send for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
 
-unsafe impl<T> Sync for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Sync for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
 
-impl<'a, T> ServerGoalHandle<'a, T>
+impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub fn new(
+    pub fn new<A, B, C>(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
-        on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
-        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
-    ) -> Self {
+        on_terminal_state: A,
+        on_executing: B,
+        publish_feedback_cb: C,
+    ) -> Self 
+    where 
+        T: rosidl_runtime_rs::Action,
+        A: Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> + 'static,
+        B: Fn(GoalUUID) -> Result<(), RclrsError> + 'static,
+        C: Fn(T::Feedback) -> Result<(), RclrsError> + 'static
+    {
         Self {
             handle,
             goal: Arc::clone(&goal),
-            on_terminal_state,
-            on_executing,
-            publish_feedback_cb
+            on_terminal_state: Box::new(on_terminal_state),
+            on_executing: Box::new(on_executing),
+            publish_feedback_cb: Box::new(publish_feedback_cb)
         }
     }
 
@@ -113,12 +123,12 @@ where
 
     fn get_state(&self) -> Result<i8, RclrsError> {
         let goal_handle = self.handle.lock();
-        let mut state = &mut GoalStatus::STATUS_UNKNOWN;
-        unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *state) }.ok()?;
-        Ok(*state)
+        let mut state = GoalStatus::STATUS_UNKNOWN;
+        unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut state) }.ok()?;
+        Ok(state)
     }
 
-    pub fn get_goal(&self) -> Arc<T::Goal> {
+    pub fn get_goal(self) -> Arc<T::Goal> {
         self.goal
     }
 
@@ -258,24 +268,24 @@ impl Drop for ActionServerHandle {
     }
 }
 
-pub struct ActionServer<'a, T>
+pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<'a, T>>>>>,
+    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
     pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
-    handle_cancel_cb: fn(Arc<ServerGoalHandle<'a, T>>) -> CancelResponse,
-    handle_accepted_cb: fn(Arc<ServerGoalHandle<'a, T>>),
+    handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
+    handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
     goal_expired: Arc<AtomicBool>
 }
 
-impl<'a, T> ActionServer<'a, T>
+impl<T> ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
@@ -286,8 +296,8 @@ where
         clock: Clock,
         qos: QoSProfile,
         handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel_cb: fn(Arc<ServerGoalHandle<'a, T>>) -> CancelResponse,
-        handle_accepted_cb: fn(Arc<ServerGoalHandle<'a, T>>),
+        handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
+        handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
     ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
@@ -508,7 +518,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
-        let on_terminal_state = &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
+        let on_terminal_state = |uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
             self.publish_result(&uuid, result);
             self.publish_status();
             self.notify_goal_terminal_state();
@@ -519,11 +529,11 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Ok(())
         };
 
-        let on_executing = &|uuid: GoalUUID| -> Result<(), RclrsError> {
+        let on_executing = |uuid: GoalUUID| -> Result<(), RclrsError> {
             self.publish_status()
         };
 
-        let publish_feedback = &|feedback_msg: T::Feedback| -> Result<(), RclrsError> {
+        let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
             self.publish_feedback(feedback_msg)
         };
 
