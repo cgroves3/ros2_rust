@@ -118,7 +118,7 @@ where
         Ok(*state)
     }
 
-    pub fn get_goal(&self) -> Arc<T::Goal> {
+    pub fn get_goal(self) -> Arc<T::Goal> {
         self.goal
     }
 
@@ -508,31 +508,45 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> () {
-        let on_terminal_state = &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
-            self.publish_result(&uuid, result);
-            self.publish_status();
-            self.notify_goal_terminal_state();
-            { 
-                let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                goal_handles.remove(&uuid);
-            }
-            Ok(())
-        };
+        // let on_terminal_state = &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
+        //     self.publish_result(&uuid, result);
+        //     self.publish_status();
+        //     self.notify_goal_terminal_state();
+        //     { 
+        //         let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+        //         goal_handles.remove(&uuid);
+        //     }
+        //     Ok(())
+        // };
 
-        let on_executing = &|uuid: GoalUUID| -> Result<(), RclrsError> {
-            self.publish_status()
-        };
+        // let on_executing = &|uuid: GoalUUID| {
+        //     self.publish_status()
+        // };
 
-        let publish_feedback = &|feedback_msg: T::Feedback| -> Result<(), RclrsError> {
-            self.publish_feedback(feedback_msg)
-        };
+        // let publish_feedback = &|feedback_msg: T::Feedback| {
+        //     self.publish_feedback(feedback_msg)
+        // };
 
         let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
-            on_terminal_state,
-            on_executing,
-            publish_feedback,
+            &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
+                self.publish_result(&uuid, result);
+                self.publish_status();
+                self.notify_goal_terminal_state();
+                { 
+                    let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                    goal_handles.remove(&uuid);
+                }
+                // Ok::<(), RclrsError>(())
+                Ok(())
+            },
+            &|uuid: GoalUUID| {
+                self.publish_status()
+            },
+            &|feedback_msg: T::Feedback| {
+                self.publish_feedback(feedback_msg)
+            },
         ));
         { 
             let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
@@ -835,7 +849,7 @@ pub trait ActionServerBase: Send + Sync {
     fn is_ready(&self, wait_set: &mut rcl_wait_set_t) -> bool;
 }
 
-impl<T> ActionServerBase for ActionServer<T> 
+impl<T> ActionServerBase for ActionServer<'_, T> 
 where T: rosidl_runtime_rs::Action {
 
     fn handle(&self) -> &ActionServerHandle {
