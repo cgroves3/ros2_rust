@@ -548,11 +548,12 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 self.publish_feedback(feedback_msg)
             },
         ));
+        let goal_handle_arc_cb  = goal_handle_arc.clone();
         { 
             let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-            goal_handles.insert(goal_uuid, goal_handle_arc.clone());
+            goal_handles.insert(goal_uuid, goal_handle_arc);
         }
-        (self.handle_accepted_cb)(goal_handle_arc);
+        (self.handle_accepted_cb)(goal_handle_arc_cb);
     }
 
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError> {
