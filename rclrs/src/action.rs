@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
-use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
+use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
@@ -305,11 +305,11 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 .ok()?;
             }
             self.publish_status()?;
-            let goal_handle = self.call_goal_accepted_cb(goal_handle_handle, uuid, goal_request);
+            let goal_handle = self.call_goal_accepted_cb(goal_handle_handle, &uuid, goal_request);
             let goal_handle_arc = Arc::new(goal_handle);
             { 
                 let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                goal_handles.insert(goal_uuid, goal_handle_arc.clone());
+                goal_handles.insert(uuid, goal_handle_arc.clone());
             }
             (self.handle_accepted_cb)(goal_handle_arc);
         }
@@ -330,10 +330,10 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
     pub fn call_goal_accepted_cb(
         &self,
         goal_handle_handle: ServerGoalHandleHandle,
-        goal_uuid: GoalUUID,
+        goal_uuid: &GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
     ) -> ServerGoalHandle<T> {
-        let on_terminal_state = |uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
+        let on_terminal_state = |uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
             self.publish_result(&uuid, result);
             self.publish_status();
             self.notify_goal_terminal_state();
@@ -344,7 +344,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Ok(())
         };
 
-        let on_executing = |uuid: GoalUUID| -> Result<(), RclrsError> {
+        let on_executing = |_uuid: &GoalUUID| -> Result<(), RclrsError> {
             self.publish_status()
         };
 
@@ -355,6 +355,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
+            goal_uuid,
             Box::new(on_terminal_state),
             Box::new(on_executing),
             Box::new(publish_feedback),

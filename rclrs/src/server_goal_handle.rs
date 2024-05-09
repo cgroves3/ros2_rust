@@ -1,6 +1,6 @@
 use rosidl_runtime_rs::{Action, GetResultService};
 
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::action::GoalUUID;
 use crate::error::{RclReturnCode, RclrsError, ToResult};
@@ -39,8 +39,9 @@ where
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-    on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
+    goal_uuid: &GoalUUID,
+    on_terminal_state: Box<dyn Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
+    on_executing: Box<dyn Fn(&GoalUUID) -> Result<(), RclrsError>>,
     publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
 }
 
@@ -55,13 +56,15 @@ where
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        on_terminal_state: Box<dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-        on_executing: Box<dyn Fn(GoalUUID) -> Result<(), RclrsError>>,
+        goal_uuid: &GoalUUID,
+        on_terminal_state: Box<dyn Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
+        on_executing: Box<dyn Fn(&GoalUUID) -> Result<(), RclrsError>>,
         publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
     ) -> Self {
         Self {
             handle,
             goal: Arc::clone(&goal),
+            goal_uuid: goal_uuid,
             on_terminal_state: on_terminal_state,
             on_executing: on_executing,
             publish_feedback_cb: publish_feedback_cb
