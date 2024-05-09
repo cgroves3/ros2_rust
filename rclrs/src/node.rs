@@ -227,7 +227,7 @@ impl Node {
         name: &str,
         qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel: fn(Arc<crate::action::ServerGoalHandle<T>>) -> CancelResponse,
+        handle_cancel: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
         handle_accepted: fn(Arc<ServerGoalHandle<T>>),
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
