@@ -91,14 +91,17 @@ impl Drop for ActionServerHandle {
 pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError>
 {
-    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T>>>>>,
+    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<T, F1, F2, F3>>>>>,
     pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
-    handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-    handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+    handle_cancel_cb: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>) -> CancelResponse,
+    handle_accepted_cb: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>),
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
@@ -116,11 +119,14 @@ where
         clock: Clock,
         qos: QoSProfile,
         handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel_cb: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-        handle_accepted_cb: fn(Arc<ServerGoalHandle<T>>),
+        handle_cancel_cb: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>) -> CancelResponse,
+        handle_accepted_cb: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>),
     ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
+        F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+        F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+        F3: Fn(T::Feedback) -> Result<(), RclrsError>
     {
         // SAFETY: Getting a zero-initialized value is always safe.
         let mut rcl_action_server = unsafe { rcl_action_get_zero_initialized_server() };
@@ -305,11 +311,11 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 .ok()?;
             }
             self.publish_status()?;
-            let goal_handle = self.call_goal_accepted_cb(goal_handle_handle, &uuid, goal_request);
+            let goal_handle = self.call_goal_accepted_cb(goal_handle_handle, uuid.clone(), goal_request);
             let goal_handle_arc = Arc::new(goal_handle);
             { 
                 let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                goal_handles.insert(uuid, goal_handle_arc.clone());
+                goal_handles.insert(uuid.clone(), goal_handle_arc.clone());
             }
             (self.handle_accepted_cb)(goal_handle_arc);
         }
@@ -330,9 +336,9 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
     pub fn call_goal_accepted_cb(
         &self,
         goal_handle_handle: ServerGoalHandleHandle,
-        goal_uuid: &GoalUUID,
+        goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
-    ) -> ServerGoalHandle<T> {
+    ) -> ServerGoalHandle<T, F1, F2, F3> {
         let on_terminal_state = |uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
             self.publish_result(&uuid, result);
             self.publish_status();
@@ -352,13 +358,13 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             self.publish_feedback(feedback_msg)
         };
 
-        ServerGoalHandle::<T>::new(
+        ServerGoalHandle::<T, F1, F2, F3>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
             goal_uuid,
-            Box::new(on_terminal_state),
-            Box::new(on_executing),
-            Box::new(publish_feedback),
+            on_terminal_state,
+            on_executing,
+            publish_feedback,
         )
     }
 

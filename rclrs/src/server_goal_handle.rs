@@ -33,33 +33,49 @@ impl Drop for ServerGoalHandleHandle {
     }
 }
 
-pub struct ServerGoalHandle<T>
+pub struct ServerGoalHandle<T, F1, F2, F3>
 where
     T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError>
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    goal_uuid: &GoalUUID,
-    on_terminal_state: Box<dyn Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-    on_executing: Box<dyn Fn(&GoalUUID) -> Result<(), RclrsError>>,
-    publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>
+    goal_uuid: GoalUUID,
+    on_terminal_state: F1,
+    on_executing: F2,
+    publish_feedback_cb: F3
 }
 
-unsafe impl<T> Send for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T, F1, F2, F3> Send for ServerGoalHandle<T, F1, F2, F3> 
+where 
+    T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError> {}
 
-unsafe impl<T> Sync for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T, F1, F2, F3> Sync for ServerGoalHandle<T, F1, F2, F3> 
+where 
+    T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError> {}
 
-impl<T> ServerGoalHandle<T>
+impl<T, F1, F2, F3> ServerGoalHandle<T, F1, F2, F3>
 where
     T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError>
 {
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        goal_uuid: &GoalUUID,
-        on_terminal_state: Box<dyn Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>>,
-        on_executing: Box<dyn Fn(&GoalUUID) -> Result<(), RclrsError>>,
-        publish_feedback_cb: Box<dyn Fn(T::Feedback) -> Result<(), RclrsError>>,
+        goal_uuid: GoalUUID,
+        on_terminal_state: F1,
+        on_executing: F2,
+        publish_feedback_cb: F3
     ) -> Self {
         Self {
             handle,

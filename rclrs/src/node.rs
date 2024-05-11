@@ -8,7 +8,7 @@ use std::os::raw::c_char;
 use std::sync::{Arc, Mutex, Weak};
 use std::vec::Vec;
 
-use rosidl_runtime_rs::Message;
+use rosidl_runtime_rs::{Message, GetResultService};
 
 pub use self::builder::*;
 pub use self::graph::*;
@@ -222,16 +222,19 @@ impl Node {
     ///
     /// [1]: crate::ActionServer
     // TODO: make action server's lifetime depend on node's lifetime
-    pub fn create_action_server<T>(
+    pub fn create_action_server<T, F1, F2, F3>(
         &mut self,
         name: &str,
         qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-        handle_accepted: fn(Arc<ServerGoalHandle<T>>),
+        handle_cancel: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>) -> CancelResponse,
+        handle_accepted: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>),
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
+        F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+        F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+        F3: Fn(T::Feedback) -> Result<(), RclrsError>
     {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),
