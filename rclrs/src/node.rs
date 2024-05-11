@@ -229,14 +229,14 @@ impl Node {
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>) -> CancelResponse,
         handle_accepted: fn(Arc<ServerGoalHandle<T, F1, F2, F3>>),
-    ) -> Result<Arc<ActionServer<T>>, RclrsError>
+    ) -> Result<Arc<ActionServer<T, F1, F2, F3>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
         F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
         F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
         F3: Fn(T::Feedback) -> Result<(), RclrsError>
     {
-        let action_server = Arc::new(ActionServer::<T>::new(
+        let action_server = Arc::new(ActionServer::<T, F1, F2, F3>::new(
             Arc::clone(&self.rcl_node_mtx),
             name,
             self.get_clock(),

@@ -88,7 +88,7 @@ impl Drop for ActionServerHandle {
     }
 }
 
-pub struct ActionServer<T>
+pub struct ActionServer<T, F1, F2, F3>
 where
     T: rosidl_runtime_rs::Action,
     F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
@@ -108,9 +108,12 @@ where
     goal_expired: Arc<AtomicBool>
 }
 
-impl<T> ActionServer<T>
+impl<T, F1, F2, F3> ActionServer<T, F1, F2, F3>
 where
     T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError>
 {
     /// Creates a new action server.
     pub(crate) fn new(
@@ -311,7 +314,35 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 .ok()?;
             }
             self.publish_status()?;
-            let goal_handle = self.call_goal_accepted_cb(goal_handle_handle, uuid.clone(), goal_request);
+
+            let on_terminal_state = |uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
+                self.publish_result(&uuid, result);
+                self.publish_status();
+                self.notify_goal_terminal_state();
+                { 
+                    let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                    goal_handles.remove(&uuid);
+                }
+                Ok(())
+            };
+    
+            let on_executing = |_uuid: &GoalUUID| -> Result<(), RclrsError> {
+                self.publish_status()
+            };
+    
+            let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
+                self.publish_feedback(feedback_msg)
+            };
+
+            let goal_handle = self.call_goal_accepted_cb(
+                goal_handle_handle, 
+                uuid.clone(), 
+                goal_request,
+                on_terminal_state,
+                on_executing,
+                publish_feedback
+            );
+
             let goal_handle_arc = Arc::new(goal_handle);
             { 
                 let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
@@ -338,33 +369,18 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_handle_handle: ServerGoalHandleHandle,
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
-    ) -> ServerGoalHandle<T, F1, F2, F3> {
-        let on_terminal_state = |uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| -> Result<(), RclrsError> {
-            self.publish_result(&uuid, result);
-            self.publish_status();
-            self.notify_goal_terminal_state();
-            { 
-                let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                goal_handles.remove(&uuid);
-            }
-            Ok(())
-        };
-
-        let on_executing = |_uuid: &GoalUUID| -> Result<(), RclrsError> {
-            self.publish_status()
-        };
-
-        let publish_feedback = |feedback_msg: T::Feedback| -> Result<(), RclrsError> {
-            self.publish_feedback(feedback_msg)
-        };
-
+        on_terminal_state: F1,
+        on_executing: F2,
+        publish_feedback_cb: F3
+    ) -> ServerGoalHandle<T, F1, F2, F3> 
+    {
         ServerGoalHandle::<T, F1, F2, F3>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
             goal_uuid,
             on_terminal_state,
             on_executing,
-            publish_feedback,
+            publish_feedback_cb,
         )
     }
 
@@ -662,8 +678,13 @@ pub trait ActionServerBase: Send + Sync {
     fn is_ready(&self, wait_set: &mut rcl_wait_set_t) -> bool;
 }
 
-impl<T> ActionServerBase for ActionServer<T> 
-where T: rosidl_runtime_rs::Action {
+impl<T, F1, F2, F3> ActionServerBase for ActionServer<T, F1, F2, F3> 
+where 
+    T: rosidl_runtime_rs::Action,
+    F1: Fn(&GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
+    F2: Fn(&GoalUUID) -> Result<(), RclrsError>,
+    F3: Fn(T::Feedback) -> Result<(), RclrsError>
+    {
 
     fn handle(&self) -> &ActionServerHandle {
         &self.handle
