@@ -1,4 +1,6 @@
-use rosidl_runtime_rs::{Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service};
+use rosidl_runtime_rs::{
+    Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service,
+};
 
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -6,11 +8,11 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
 use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
+use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
-use crate::{rcl_bindings::*, MessageCow};
-use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
 use crate::Clock;
+use crate::{rcl_bindings::*, MessageCow};
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread
 // they are running in. Therefore, this type can be safely sent to another thread.
@@ -93,8 +95,11 @@ pub struct ActionServer<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub(crate) goal_handles_mtx: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<'a, T>>>>>,
-    pub(crate) goal_results: Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>>,
+    pub(crate) goal_handles_mtx:
+        Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<ServerGoalHandle<'a, T>>>>>,
+    pub(crate) goal_results: Arc<
+        Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>,
+    >,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
@@ -103,7 +108,7 @@ where
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
-    goal_expired: Arc<AtomicBool>
+    goal_expired: Arc<AtomicBool>,
 }
 
 impl<'a, T> ActionServer<'a, T>
@@ -125,8 +130,8 @@ where
     {
         // SAFETY: Getting a zero-initialized value is always safe.
         let mut rcl_action_server = unsafe { rcl_action_get_zero_initialized_server() };
-        let type_support_ptr =
-            <T as rosidl_runtime_rs::Action>::get_type_support() as *const rosidl_action_type_support_t;
+        let type_support_ptr = <T as rosidl_runtime_rs::Action>::get_type_support()
+            as *const rosidl_action_type_support_t;
         let name_c_string = CString::new(name).map_err(|err| RclrsError::StringContainsNul {
             err,
             s: name.into(),
@@ -159,7 +164,7 @@ where
         let handle = Arc::new(ActionServerHandle {
             rcl_action_server_mtx: Mutex::new(rcl_action_server),
             rcl_node_mtx,
-            in_use_by_wait_set: Arc::new(AtomicBool::new(false))
+            in_use_by_wait_set: Arc::new(AtomicBool::new(false)),
         });
 
         Ok(Self {
@@ -173,7 +178,7 @@ where
             goal_request_ready: Arc::new(AtomicBool::new(false)),
             cancel_request_ready: Arc::new(AtomicBool::new(false)),
             result_request_ready: Arc::new(AtomicBool::new(false)),
-            goal_expired: Arc::new(AtomicBool::new(false))
+            goal_expired: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -193,14 +198,20 @@ where
         Ok(())
     }
 
-    
-    pub fn take_goal_request(&self) -> Result<(<<T as Action>::SendGoal as SendGoalService>::Request, rmw_request_id_t), RclrsError> {
+    pub fn take_goal_request(
+        &self,
+    ) -> Result<
+        (
+            <<T as Action>::SendGoal as SendGoalService>::Request,
+            rmw_request_id_t,
+        ),
+        RclrsError,
+    > {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        type RmwMsg<T> =
-            <<<T as Action>::SendGoal as SendGoalService>::Request as Message>::RmwMsg;
+        type RmwMsg<T> = <<<T as Action>::SendGoal as SendGoalService>::Request as Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
         let handle = &*self.handle.lock();
         unsafe {
@@ -211,11 +222,21 @@ where
             )
             .ok()?;
         }
-        Ok((<<<T as Action>::SendGoal as SendGoalService>::Request>::from_rmw_message(request_out), request_id_out))
+        Ok((
+            <<<T as Action>::SendGoal as SendGoalService>::Request>::from_rmw_message(request_out),
+            request_id_out,
+        ))
     }
 
-
-pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>::Request, rmw_request_id_t), RclrsError> {
+    pub fn take_result_request(
+        &self,
+    ) -> Result<
+        (
+            <T::GetResult as GetResultService>::Request,
+            rmw_request_id_t,
+        ),
+        RclrsError,
+    > {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
@@ -233,7 +254,10 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             )
             .ok()?
         }
-        Ok((<T::GetResult as GetResultService>::Request::from_rmw_message(request_out), request_id_out))
+        Ok((
+            <T::GetResult as GetResultService>::Request::from_rmw_message(request_out),
+            request_id_out,
+        ))
     }
 
     pub fn take_cancel_request(
@@ -253,7 +277,10 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             )
             .ok()?
         }
-        Ok((CancelGoal_Request::from_rmw_message(request_out), request_id_out))
+        Ok((
+            CancelGoal_Request::from_rmw_message(request_out),
+            request_id_out,
+        ))
     }
 
     pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
@@ -270,12 +297,12 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             Err(e) => return Err(e),
         };
 
-        
         let goal = Arc::new(goal_request.get_goal::<T>());
         let uuid = GoalUUID::new(goal_request.get_goal_id());
         let user_response = (self.handle_goal_cb)(&uuid, goal);
 
-        type RmwMsg<T> = <<<T as Action>::SendGoal as Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
+        type RmwMsg<T> =
+            <<<T as Action>::SendGoal as Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
         let goal_response = RmwMsg::<T>::default();
         //TODO: Set the SendGoalResponse.accepted field to GoalResponse::ACCEPT_AND_EXECUTE == user_response || GoalResponse::ACCEPT_AND_DEFER == user_response;
         // per rclcpp
@@ -290,47 +317,75 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         }
         .ok()?;
 
-        if matches!(user_response, GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer) {
+        if matches!(
+            user_response,
+            GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer
+        ) {
             let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
             let uuid = GoalUUID::new(goal_request.get_goal_id());
-            goal_info_handle.lock().goal_id.uuid.copy_from_slice(&uuid.0);
-            
-            let goal_handle_handle = self.accept_new_goal(goal_info_handle);
-            // let mut_handle = &mut *self.handle.lock();
-            // let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
-            // unsafe { 
-            //     let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
+            goal_info_handle
+                .lock()
+                .goal_id
+                .uuid
+                .copy_from_slice(&uuid.0);
 
-            //     let goal_handle_handle = ServerGoalHandleHandle {
-            //         rcl_goal_handle_mtx: Mutex::new(*goal_handle_raw_ptr)
-            //     };
-            // }
-            
-            
+            let goal_handle_handle = self.accept_new_goal(goal_info_handle);
 
             // TODO: rclcpp also inserts into a map of GoalUUID and rcl_action_goal_handle_t pairs for some reason. Unsure if this is needed
             if matches!(user_response, GoalResponse::AcceptAndExecute) {
                 let goal_handle = goal_handle_handle.lock();
                 unsafe {
-                    rcl_action_update_goal_state(*goal_handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
+                    rcl_action_update_goal_state(
+                        *goal_handle,
+                        rcl_action_goal_event_e::GOAL_EVENT_EXECUTE,
+                    )
                 }
                 .ok()?;
             }
             self.publish_status()?;
-            self.call_goal_accepted_cb(goal_handle_handle, uuid, goal_request);
+            let on_terminal_state =
+                &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
+                    self.publish_result(&uuid, result);
+                    self.publish_status();
+                    self.notify_goal_terminal_state();
+                    {
+                        let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                        goal_handles.remove(&uuid);
+                    }
+                    Ok(())
+                };
+
+            let on_executing = &|uuid: GoalUUID| self.publish_status();
+
+            let publish_feedback = &|feedback_msg: T::Feedback| self.publish_feedback(feedback_msg);
+
+            let goal_handle_arc = Arc::new(
+                self.call_goal_accepted_cb(
+                    goal_handle_handle, 
+                    uuid.clone(), 
+                    goal_request,
+                    on_terminal_state,
+                    on_executing,
+                    publish_feedback
+                )
+            );
+            let goal_handle_arc_cb = goal_handle_arc.clone();
+            {
+                let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                goal_handles.insert(uuid.clone(), goal_handle_arc);
+            }
+            (self.handle_accepted_cb)(goal_handle_arc_cb);
         }
         Ok(())
     }
 
     pub fn accept_new_goal(&self, goal_info_handle: GoalInfoHandle) -> ServerGoalHandleHandle {
         let mut_handle = &mut *self.handle.lock();
-            let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
-            unsafe { 
-                let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
-                ServerGoalHandleHandle::new(
-                    Mutex::new(goal_handle_raw_ptr)
-                )
-            }
+        let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
+        unsafe {
+            let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
+            ServerGoalHandleHandle::new(Mutex::new(goal_handle_raw_ptr))
+        }
     }
 
     pub fn call_goal_accepted_cb(
@@ -338,53 +393,20 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         goal_handle_handle: ServerGoalHandleHandle,
         goal_uuid: GoalUUID,
         goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
-    ) -> () {
-        // let on_terminal_state = &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
-        //     self.publish_result(&uuid, result);
-        //     self.publish_status();
-        //     self.notify_goal_terminal_state();
-        //     { 
-        //         let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-        //         goal_handles.remove(&uuid);
-        //     }
-        //     Ok(())
-        // };
-
-        // let on_executing = &|uuid: GoalUUID| {
-        //     self.publish_status()
-        // };
-
-        // let publish_feedback = &|feedback_msg: T::Feedback| {
-        //     self.publish_feedback(feedback_msg)
-        // };
-
-        let goal_handle_arc = Arc::new(ServerGoalHandle::<T>::new(
+        on_terminal_state: &'a dyn Fn(
+            GoalUUID,
+            Arc<<T::GetResult as GetResultService>::Response>,
+        ) -> Result<(), RclrsError>,
+        on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
+        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
+    ) -> ServerGoalHandle<T> {
+        ServerGoalHandle::<T>::new(
             Arc::new(goal_handle_handle),
             Arc::new(goal_request.get_goal::<T>()),
-            &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
-                self.publish_result(&uuid, result);
-                self.publish_status();
-                self.notify_goal_terminal_state();
-                { 
-                    let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                    goal_handles.remove(&uuid);
-                }
-                // Ok::<(), RclrsError>(())
-                Ok(())
-            },
-            &|uuid: GoalUUID| {
-                self.publish_status()
-            },
-            &|feedback_msg: T::Feedback| {
-                self.publish_feedback(feedback_msg)
-            },
-        ));
-        let goal_handle_arc_cb  = goal_handle_arc.clone();
-        { 
-            let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-            goal_handles.insert(goal_uuid, goal_handle_arc);
-        }
-        (self.handle_accepted_cb)(goal_handle_arc_cb);
+            on_terminal_state,
+            on_executing,
+            publish_feedback_cb,
+        )
     }
 
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError> {
@@ -407,11 +429,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         let request_handle = &*cancel_request_handle.lock();
         let response_handle = &mut *cancel_response_handle.lock();
         unsafe {
-            rcl_action_process_cancel_request(
-                handle, 
-                request_handle, 
-                response_handle as *mut _
-            )
+            rcl_action_process_cancel_request(handle, request_handle, response_handle as *mut _)
         }
         .ok()?;
         let response_mtx = Arc::new(Mutex::new(CancelGoal_Response::default()));
@@ -419,7 +437,12 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             let mut response = response_mtx.lock().unwrap();
             response.return_code = response_handle.msg.return_code;
         }
-        let goals = unsafe { std::slice::from_raw_parts(response_handle.msg.goals_canceling.data, response_handle.msg.goals_canceling.size) };
+        let goals = unsafe {
+            std::slice::from_raw_parts(
+                response_handle.msg.goals_canceling.data,
+                response_handle.msg.goals_canceling.size,
+            )
+        };
 
         for i in 0..goals.len() {
             let goal_info = &goals[i];
@@ -428,9 +451,12 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             let cb_response_code = self.call_handle_cancel_callback(uuid);
             if matches!(CancelResponse::Accept, cb_response_code) {
                 let mut rs_goal_info = GoalInfo::default();
-                rs_goal_info.goal_id.uuid.clone_from_slice(&goal_info.goal_id.uuid);
+                rs_goal_info
+                    .goal_id
+                    .uuid
+                    .clone_from_slice(&goal_info.goal_id.uuid);
                 //TODO: Set the timestamp for the rs_goal_info
-                { 
+                {
                     let mut response = response_mtx.lock().unwrap();
                     response.goals_canceling.push(rs_goal_info);
                 }
@@ -444,7 +470,7 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
             if goals.len() >= 1 && 0 == response.goals_canceling.len() {
                 response.return_code = CancelResponse::Reject as i8;
             }
-            
+
             // Probably overkill
             if !response.goals_canceling.is_empty() {
                 // at least one goal state changed, publish a new status message
@@ -461,12 +487,12 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                 rcl_action_send_cancel_response(
                     handle,
                     &mut req_id,
-                    rmw_message.as_ref() as *const <CancelGoal_Response as Message>::RmwMsg as *mut _,
+                    rmw_message.as_ref() as *const <CancelGoal_Response as Message>::RmwMsg
+                        as *mut _,
                 )
             }
         }
         .ok()?;
-        
 
         Ok(())
     }
@@ -491,13 +517,19 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
 
         let handle = &*self.handle.lock();
-        let goal_exists = unsafe { rcl_action_server_goal_exists(handle, &*goal_info_handle.lock()) };
-        type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
+        let goal_exists =
+            unsafe { rcl_action_server_goal_exists(handle, &*goal_info_handle.lock()) };
+        type RmwMsg<T> =
+            <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
         if !goal_exists {
             //TODO: set this to unknown
             let mut result_response = RmwMsg::<T>::default();
             unsafe {
-                rcl_action_send_result_response(handle, &mut req_id, &mut result_response as *mut RmwMsg<T> as *mut _)
+                rcl_action_send_result_response(
+                    handle,
+                    &mut req_id,
+                    &mut result_response as *mut RmwMsg<T> as *mut _,
+                )
             }
             .ok()?;
         } else {
@@ -507,16 +539,22 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
                     Some(res) => {
                         let rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
                         unsafe {
-                            rcl_action_send_result_response(handle, &mut req_id, rmw_message.as_ref() as *const RmwMsg<T> as *mut _)
+                            rcl_action_send_result_response(
+                                handle,
+                                &mut req_id,
+                                rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
+                            )
                         }
                         .ok()?;
                         let sent_response = <<<T as Action>::GetResult as GetResultService>::Response as Message>::from_rmw_message(rmw_message.into_owned());
-                        { self.goal_results.lock().unwrap() }.insert(goal_uuid, Arc::new(sent_response));
+                        { self.goal_results.lock().unwrap() }
+                            .insert(goal_uuid, Arc::new(sent_response));
                     }
                     None => {}
                 }
             } else {
-                if let Some(request_headers) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
+                if let Some(request_headers) =
+                    { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
                 {
                     request_headers.push(req_id);
                 }
@@ -530,11 +568,16 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         let mut num_expired: usize = 1;
         while num_expired > 0 {
             let handle = &*self.handle.lock();
-            unsafe { rcl_action_expire_goals(handle, &mut *goal_info_handle.lock(), 1, &mut num_expired) }.ok()?;
+            unsafe {
+                rcl_action_expire_goals(handle, &mut *goal_info_handle.lock(), 1, &mut num_expired)
+            }
+            .ok()?;
             if num_expired > 0 {
                 // TODO: Convert the expired goal_info uuid to a uuid
                 let mut goal_uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
-                goal_uuid.0.copy_from_slice(&goal_info_handle.lock().goal_id.uuid);
+                goal_uuid
+                    .0
+                    .copy_from_slice(&goal_info_handle.lock().goal_id.uuid);
                 { self.goal_results.lock().unwrap() }.remove(&goal_uuid);
                 { self.result_requests.lock().unwrap() }.remove(&goal_uuid);
                 { self.goal_handles_mtx.lock().unwrap() }.remove(&goal_uuid);
@@ -553,30 +596,48 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         let mut c_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
         unsafe { rcl_action_get_goal_status_array(handle, &mut c_status_array) }.ok()?;
         unsafe { rcl_action_goal_status_array_fini(&mut c_status_array) }.ok()?;
-        let status_array_slice = unsafe { std::slice::from_raw_parts( c_status_array.msg.status_list.data, c_status_array.msg.status_list.size) };
+        let status_array_slice = unsafe {
+            std::slice::from_raw_parts(
+                c_status_array.msg.status_list.data,
+                c_status_array.msg.status_list.size,
+            )
+        };
         for i in 0..status_array_slice.len() {
             let status_msg = &status_array_slice[i];
 
             let mut goal_status = GoalStatus::default();
             goal_status.status = status_msg.status;
-            goal_status.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time { 
-                sec: status_msg.goal_info.stamp.sec, 
-                nanosec: status_msg.goal_info.stamp.nanosec 
+            goal_status.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time {
+                sec: status_msg.goal_info.stamp.sec,
+                nanosec: status_msg.goal_info.stamp.nanosec,
             };
-            goal_status.goal_info.goal_id.uuid.copy_from_slice(&status_msg.goal_info.goal_id.uuid);
+            goal_status
+                .goal_info
+                .goal_id
+                .uuid
+                .copy_from_slice(&status_msg.goal_info.goal_id.uuid);
             goal_status_array.status_list.push(goal_status);
         }
-        let goal_status_array_rmw_msg = <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(goal_status_array.into_cow());
-        unsafe { 
+        let goal_status_array_rmw_msg =
+            <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(
+                goal_status_array.into_cow(),
+            );
+        unsafe {
             rcl_action_publish_status(
-                handle, 
-                goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg as *mut _
-            ) 
-        }.ok()?;
+                handle,
+                goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg
+                    as *mut _,
+            )
+        }
+        .ok()?;
         Ok(())
     }
 
-    pub fn publish_result(&self, goal_uuid: &GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError> {
+    pub fn publish_result(
+        &self,
+        goal_uuid: &GoalUUID,
+        result: Arc<<T::GetResult as GetResultService>::Response>,
+    ) -> Result<(), RclrsError> {
         let goal_info = GoalInfoHandle::new(self.handle.clone());
         goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
         let server_handle = &*self.handle.lock();
@@ -589,32 +650,35 @@ pub fn take_result_request(&self) -> Result<(<T::GetResult as GetResultService>:
         match Arc::into_inner(result) {
             Some(res) => {
                 let result_rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
-                if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid) {
+                if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
+                {
                     type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
                     for req_id in req_ids {
                         unsafe {
                             rcl_action_send_result_response(
-                                server_handle, 
-                                req_id as *mut _, 
+                                server_handle,
+                                req_id as *mut _,
                                 result_rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
                             )
-                        }.ok()?;
+                        }
+                        .ok()?;
                     }
                 }
             }
-            None => { 
-                return Err(RclrsError::RclError { code: crate::RclReturnCode::Error, msg: None });
+            None => {
+                return Err(RclrsError::RclError {
+                    code: crate::RclReturnCode::Error,
+                    msg: None,
+                });
             }
         }
-        
+
         Ok(())
     }
 
     pub fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
         let handle = &*self.handle.lock();
-        unsafe {
-            rcl_action_notify_goal_done(handle)
-        }.ok()?;
+        unsafe { rcl_action_notify_goal_done(handle) }.ok()?;
         Ok(())
     }
 
@@ -681,9 +745,10 @@ pub trait ActionServerBase: Send + Sync {
     fn is_ready(&self, wait_set: &mut rcl_wait_set_t) -> bool;
 }
 
-impl<T> ActionServerBase for ActionServer<'_, T> 
-where T: rosidl_runtime_rs::Action {
-
+impl<T> ActionServerBase for ActionServer<'_, T>
+where
+    T: rosidl_runtime_rs::Action,
+{
     fn handle(&self) -> &ActionServerHandle {
         &self.handle
     }
@@ -701,7 +766,7 @@ where T: rosidl_runtime_rs::Action {
             panic!("Executing action server but nothing is ready")
         }
     }
-    
+
     // fn set_goal_request_ready(&self, value: bool) -> () {
     //     self.goal_request_ready.store(value, Ordering::SeqCst)
     // }
@@ -728,15 +793,18 @@ where T: rosidl_runtime_rs::Action {
                 &mut goal_request_ready,
                 &mut cancel_request_ready,
                 &mut result_request_ready,
-                &mut goal_expired
+                &mut goal_expired,
             )
         };
 
-        self.goal_request_ready.store(goal_request_ready, Ordering::SeqCst);
-        self.cancel_request_ready.store(cancel_request_ready, Ordering::SeqCst);
-        self.result_request_ready.store(result_request_ready, Ordering::SeqCst);
+        self.goal_request_ready
+            .store(goal_request_ready, Ordering::SeqCst);
+        self.cancel_request_ready
+            .store(cancel_request_ready, Ordering::SeqCst);
+        self.result_request_ready
+            .store(result_request_ready, Ordering::SeqCst);
         self.goal_expired.store(goal_expired, Ordering::SeqCst);
-        
+
         self.goal_request_ready.load(Ordering::SeqCst)
             || self.cancel_request_ready.load(Ordering::SeqCst)
             || self.result_request_ready.load(Ordering::SeqCst)
@@ -745,14 +813,14 @@ where T: rosidl_runtime_rs::Action {
 }
 
 pub struct CancelRequestHandle {
-    rcl_action_cancel_request_mtx: Mutex<rcl_action_cancel_request_t>
+    rcl_action_cancel_request_mtx: Mutex<rcl_action_cancel_request_t>,
 }
 
 impl CancelRequestHandle {
-pub fn new() -> Self {
+    pub fn new() -> Self {
         let rcl_action_cancel_req = unsafe { rcl_action_get_zero_initialized_cancel_request() };
         Self {
-            rcl_action_cancel_request_mtx: Mutex::new(rcl_action_cancel_req)
+            rcl_action_cancel_request_mtx: Mutex::new(rcl_action_cancel_req),
         }
     }
 

@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use rosidl_runtime_rs::{Action, GetResultService};
 
-use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
-use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
+use crate::error::{RclReturnCode, RclrsError, ToResult};
+use crate::vendor::action_msgs::msg::GoalStatus;
 use crate::rcl_bindings::*;
 use crate::GoalUUID;
 
