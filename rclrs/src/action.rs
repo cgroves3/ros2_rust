@@ -9,6 +9,7 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
+use crate::vendor::action_msgs;
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::Clock;
@@ -115,6 +116,8 @@ impl<'a, T> ActionServer<'a, T>
 where
     T: rosidl_runtime_rs::Action,
 {
+    const GOAL_TERMINAL_STATES: [i8; 3] = [GoalStatus::STATUS_ABORTED, GoalStatus::STATUS_SUCCEEDED, GoalStatus::STATUS_CANCELED];
+
     /// Creates a new action server.
     pub(crate) fn new(
         rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
@@ -343,30 +346,12 @@ where
                 .ok()?;
             }
             self.publish_status()?;
-            let on_terminal_state =
-                &|uuid: GoalUUID, result: Arc<<T::GetResult as GetResultService>::Response>| {
-                    self.publish_result(&uuid, result);
-                    self.publish_status();
-                    self.notify_goal_terminal_state();
-                    {
-                        let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                        goal_handles.remove(&uuid);
-                    }
-                    Ok(())
-                };
-
-            let on_executing = &|uuid: GoalUUID| self.publish_status();
-
-            let publish_feedback = &|feedback_msg: T::Feedback| self.publish_feedback(feedback_msg);
 
             let goal_handle_arc = Arc::new(
-                self.call_goal_accepted_cb(
-                    goal_handle_handle, 
-                    uuid.clone(), 
-                    goal_request,
-                    on_terminal_state,
-                    on_executing,
-                    publish_feedback
+                ServerGoalHandle::<T>::new(
+                    Arc::new(goal_handle_handle),
+                    Arc::new(goal_request.get_goal::<T>()),
+                    &self
                 )
             );
             let goal_handle_arc_cb = goal_handle_arc.clone();
@@ -375,6 +360,21 @@ where
                 goal_handles.insert(uuid.clone(), goal_handle_arc);
             }
             (self.handle_accepted_cb)(goal_handle_arc_cb);
+            let goal_handle_state = goal_handle_arc_cb.get_state()?;
+            if Self::GOAL_TERMINAL_STATES.contains(&goal_handle_state) {
+                let result = GetResultService::Response::default();
+                // Set the status and result message
+                self.publish_result(&uuid, result);
+                self.publish_status();
+                self.notify_goal_terminal_state();
+                {
+                    let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
+                    goal_handles.remove(&uuid);
+                }
+            }
+            if goal_handle_state == GoalStatus::STATUS_EXECUTING {
+                self.publish_status();
+            }
         }
         Ok(())
     }
@@ -386,27 +386,6 @@ where
             let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
             ServerGoalHandleHandle::new(Mutex::new(goal_handle_raw_ptr))
         }
-    }
-
-    pub fn call_goal_accepted_cb(
-        &self,
-        goal_handle_handle: ServerGoalHandleHandle,
-        goal_uuid: GoalUUID,
-        goal_request: <<T as Action>::SendGoal as SendGoalService>::Request,
-        on_terminal_state: &'a dyn Fn(
-            GoalUUID,
-            Arc<<T::GetResult as GetResultService>::Response>,
-        ) -> Result<(), RclrsError>,
-        on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
-        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
-    ) -> ServerGoalHandle<T> {
-        ServerGoalHandle::<T>::new(
-            Arc::new(goal_handle_handle),
-            Arc::new(goal_request.get_goal::<T>()),
-            on_terminal_state,
-            on_executing,
-            publish_feedback_cb,
-        )
     }
 
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError> {
@@ -690,7 +669,7 @@ where
                 let cancel_cb_response = (self.handle_cancel_cb)(handle.clone());
                 match cancel_cb_response {
                     CancelResponse::Accept => {
-                        let result = handle._cancel_goal();
+                        let result = handle.cancel_goal();
                         if result.is_err() {
                             CancelResponse::Reject
                         } else {

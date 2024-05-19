@@ -4,7 +4,7 @@ use rosidl_runtime_rs::{Action, GetResultService};
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
 use crate::vendor::action_msgs::msg::GoalStatus;
-use crate::rcl_bindings::*;
+use crate::{rcl_bindings::*, ActionServer};
 use crate::GoalUUID;
 
 
@@ -40,9 +40,7 @@ where
 {
     handle: Arc<ServerGoalHandleHandle>,
     goal: Arc<<T as Action>::Goal>,
-    on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
-    on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
-    publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>
+    server: &ActionServer<'a, T>
 }
 
 unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
@@ -56,24 +54,20 @@ where
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
         goal: Arc<<T as Action>::Goal>,
-        on_terminal_state: &'a dyn Fn(GoalUUID, Arc<<T::GetResult as GetResultService>::Response>) -> Result<(), RclrsError>,
-        on_executing: &'a dyn Fn(GoalUUID) -> Result<(), RclrsError>,
-        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
+        server: &ActionServer<'a, T>
     ) -> Self {
         Self {
             handle,
             goal: Arc::clone(&goal),
-            on_terminal_state,
-            on_executing,
-            publish_feedback_cb
+            server: server,
         }
     }
 
     pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
-        (self.publish_feedback_cb)(feedback)
+        self.server.publish_feedback(feedback)
     }
 
-    fn get_state(&self) -> Result<i8, RclrsError> {
+    pub fn get_state(&self) -> Result<i8, RclrsError> {
         let goal_handle = self.handle.lock();
         let state = &mut GoalStatus::STATUS_UNKNOWN;
         unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *state) }.ok()?;
@@ -104,7 +98,7 @@ where
     }
 
     //TODO: Is `result` needed for these methods?
-    pub fn _abort(&self) -> Result<(), RclrsError> {
+    pub fn abort(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe { 
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
@@ -113,7 +107,7 @@ where
         Ok(())
     }
 
-    pub fn _succeed(&self) -> Result<(), RclrsError> {
+    pub fn succeed(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
@@ -122,7 +116,7 @@ where
         Ok(())
     }
 
-    pub fn _cancel_goal(&self) -> Result<(), RclrsError> {
+    pub fn cancel_goal(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
@@ -131,7 +125,7 @@ where
         Ok(())
     }
 
-    pub fn _canceled(&self) -> Result<(), RclrsError> {
+    pub fn canceled(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
@@ -140,7 +134,7 @@ where
         Ok(())
     }
 
-    pub fn _execute(&self) -> Result<(), RclrsError> {
+    pub fn execute(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_EXECUTE)
