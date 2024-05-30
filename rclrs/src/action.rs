@@ -9,7 +9,6 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 use crate::error::{RclActionReturnCode, RclReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
-use crate::vendor::action_msgs;
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::Clock;
@@ -350,6 +349,7 @@ where
             let goal_handle_arc = Arc::new(
                 ServerGoalHandle::<T>::new(
                     Arc::new(goal_handle_handle),
+                    Arc::new(<T as Action>::Result::default()),
                     Arc::new(goal_request.get_goal::<T>()),
                     &self
                 )
@@ -362,9 +362,12 @@ where
             (self.handle_accepted_cb)(goal_handle_arc_cb);
             let goal_handle_state = goal_handle_arc_cb.get_state()?;
             if Self::GOAL_TERMINAL_STATES.contains(&goal_handle_state) {
-                let result = GetResultService::Response::default();
-                // Set the status and result message
-                self.publish_result(&uuid, result);
+                // type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
+                type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
+                let result_response = Response::<T>::default();
+                result_response.set_status(goal_handle_state);
+                result_response.set_result(goal_handle_arc_cb.get_result());
+                self.publish_result(&uuid, Arc::new(result_response));
                 self.publish_status();
                 self.notify_goal_terminal_state();
                 {
@@ -601,7 +604,7 @@ where
             <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(
                 goal_status_array.into_cow(),
             );
-        unsafe {
+    unsafe {
             rcl_action_publish_status(
                 handle,
                 goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg

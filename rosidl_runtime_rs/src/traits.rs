@@ -174,6 +174,14 @@ pub trait HasGoal {
     fn get_goal<A: Action>(&self) -> Goal<A>;
 }
 
+pub trait Status {
+    fn set_status(status: u8) -> ();
+}
+
+pub trait SetResult {
+    fn set_status(result: <A as Action>::Result) -> ();
+}
+
 /// Trait for Action's SendGoalService.
 ///
 /// User code never needs to call this trait's method, much less implement this trait.
@@ -182,7 +190,7 @@ pub trait SendGoalService : Service {
     type Request: Message + HasGoalId + HasGoal;
 
     /// The response message associated with this service.
-    type Response: Message;   
+    type Response: Message;
 }
 
 /// Trait for Action's GetResultService.
@@ -193,7 +201,7 @@ pub trait GetResultService : Service {
     type Request: Message + HasGoalId + HasGoal;
 
     /// The response message associated with this service.
-    type Response: Message;   
+    type Response: Message + Status;
 }
 
 

@@ -39,6 +39,7 @@ where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
+    result: Arc<<T as Action>::Result>,
     goal: Arc<<T as Action>::Goal>,
     server: &ActionServer<'a, T>
 }
@@ -53,11 +54,13 @@ where
 {
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
+        result: Arc<<T as Action>::Result>,
         goal: Arc<<T as Action>::Goal>,
         server: &ActionServer<'a, T>
     ) -> Self {
         Self {
             handle,
+            result: Arc::clone(&result),
             goal: Arc::clone(&goal),
             server: server,
         }
@@ -76,6 +79,10 @@ where
 
     pub fn get_goal(self) -> Arc<T::Goal> {
         self.goal
+    }
+
+    pub fn get_result(self) -> Arc<T::Result> {
+        self.result
     }
 
     pub fn is_canceling(&self) -> bool {

@@ -110,7 +110,7 @@ impl rosidl_runtime_rs::RmwMessage for @(type_name) where Self: Sized {
 }
 
 impl rosidl_runtime_rs::HasGoalId for @(type_name) {
-  fn get_goal_id(&self) -> [u8; 16] { goal_id.uuid }
+  fn get_goal_id(&self) -> [u8; 16] { self.goal_id.uuid }
 }
 
 
@@ -121,7 +121,23 @@ impl rosidl_runtime_rs::HasGoal for @(type_name) {
     fn get_@(get_rs_name(member.name))(&self): @(get_rmw_rs_type(member.type)),
 }
 @[        end if]@
+@[end for]@
 
+
+@[for member in msg_spec.structure.members]@
+@[    if get_rs_name(member.name) == "status" ]@
+impl rosidl_runtime_rs::Status for @(type_name) {
+    fn set_status(&self, status: u8) -> () { self.status = status; }
+}
+@[        end if]@
+@[end for]@
+
+@[for member in msg_spec.structure.members]@
+@[    if get_rs_name(member.name) == "result" ]@
+impl rosidl_runtime_rs::SetResult for @(type_name) {
+    fn set_result(&self, result: @(get_rmw_rs_type(member.type))) -> () { self.result = result; }
+}
+@[        end if]@
 @[end for]@
 
 @[end for]
