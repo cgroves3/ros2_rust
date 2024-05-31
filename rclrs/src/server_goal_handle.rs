@@ -41,7 +41,7 @@ where
     handle: Arc<ServerGoalHandleHandle>,
     result: Arc<<T as Action>::Result>,
     goal: Arc<<T as Action>::Goal>,
-    server: &ActionServer<'a, T>
+    server: &'a ActionServer<'a, T>
 }
 
 unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
@@ -77,11 +77,11 @@ where
         Ok(*state)
     }
 
-    pub fn get_goal(self) -> Arc<T::Goal> {
+    pub fn get_goal(&self) -> Arc<T::Goal> {
         self.goal
     }
 
-    pub fn get_result(self) -> Arc<T::Result> {
+    pub fn get_result(&self) -> Arc<T::Result> {
         self.result
     }
 

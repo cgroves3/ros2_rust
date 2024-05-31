@@ -127,7 +127,7 @@ impl rosidl_runtime_rs::HasGoal for @(type_name) {
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "status" ]@
 impl rosidl_runtime_rs::Status for @(type_name) {
-    fn set_status(&self, status: u8) -> () { self.status = status; }
+    fn set_status(&mut self, goal_status: i8) -> () { self.status = goal_status; }
 }
 @[        end if]@
 @[end for]@
@@ -135,7 +135,7 @@ impl rosidl_runtime_rs::Status for @(type_name) {
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "result" ]@
 impl rosidl_runtime_rs::SetResult for @(type_name) {
-    fn set_result(&self, result: @(get_rmw_rs_type(member.type))) -> () { self.result = result; }
+    fn set_result(&mut self, result: @(get_rmw_rs_type(member.type))) -> () { self.result = result; }
 }
 @[        end if]@
 @[end for]@
