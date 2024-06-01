@@ -39,9 +39,9 @@ where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
-    result: Arc<<T as Action>::Result>,
-    goal: Arc<<T as Action>::Goal>,
-    server: &'a ActionServer<'a, T>
+    pub(crate) result: <T as Action>::Result,
+    pub(crate) goal: Arc<<T as Action>::Goal>,
+    publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
 }
 
 unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
@@ -54,20 +54,20 @@ where
 {
     pub fn new(
         handle: Arc<ServerGoalHandleHandle>,
-        result: Arc<<T as Action>::Result>,
+        result: <T as Action>::Result,
         goal: Arc<<T as Action>::Goal>,
-        server: &ActionServer<'a, T>
+        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
     ) -> Self {
         Self {
             handle,
-            result: Arc::clone(&result),
+            result: result,
             goal: Arc::clone(&goal),
-            server: server,
+            publish_feedback_cb: publish_feedback_cb,
         }
     }
 
     pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
-        self.server.publish_feedback(feedback)
+        (self.publish_feedback_cb)(feedback)
     }
 
     pub fn get_state(&self) -> Result<i8, RclrsError> {
@@ -75,14 +75,6 @@ where
         let state = &mut GoalStatus::STATUS_UNKNOWN;
         unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *state) }.ok()?;
         Ok(*state)
-    }
-
-    pub fn get_goal(&self) -> Arc<T::Goal> {
-        self.goal
-    }
-
-    pub fn get_result(&self) -> Arc<T::Result> {
-        self.result
     }
 
     pub fn is_canceling(&self) -> bool {

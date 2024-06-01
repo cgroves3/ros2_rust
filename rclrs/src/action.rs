@@ -346,26 +346,27 @@ where
             }
             self.publish_status()?;
 
+            let publish_feedback = &|feedback_msg: T::Feedback| self.publish_feedback(feedback_msg);
+
             let goal_handle_arc = Arc::new(
                 ServerGoalHandle::<T>::new(
                     Arc::new(goal_handle_handle),
-                    Arc::new(<T as Action>::Result::default()),
+                    <T as Action>::Result::default(),
                     Arc::new(goal_request.get_goal::<T>()),
-                    &self
+                    publish_feedback
                 )
             );
-            let goal_handle_arc_cb = goal_handle_arc.clone();
             {
                 let mut goal_handles = self.goal_handles_mtx.lock().unwrap();
-                goal_handles.insert(uuid.clone(), goal_handle_arc);
+                goal_handles.insert(uuid.clone(), goal_handle_arc.clone());
             }
-            (self.handle_accepted_cb)(goal_handle_arc_cb);
-            let goal_handle_state = goal_handle_arc_cb.get_state()?;
+            (self.handle_accepted_cb)(goal_handle_arc.clone());
+            let goal_handle_state = goal_handle_arc.clone().get_state()?;
             if Self::GOAL_TERMINAL_STATES.contains(&goal_handle_state) {
                 type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
                 let result_response = Response::<T>::default();
                 result_response.set_status(goal_handle_state);
-                result_response.set_result::<T>(goal_handle_arc_cb.get_result());
+                result_response.set_result::<T>(goal_handle_arc.clone().result);
                 self.publish_result(&uuid, Arc::new(result_response));
                 self.publish_status();
                 self.notify_goal_terminal_state();
@@ -603,7 +604,7 @@ where
             <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(
                 goal_status_array.into_cow(),
             );
-    unsafe {
+        unsafe {
             rcl_action_publish_status(
                 handle,
                 goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg
