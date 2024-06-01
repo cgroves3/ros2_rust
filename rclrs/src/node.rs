@@ -227,8 +227,8 @@ impl Node {
         name: &str,
         qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-        handle_accepted: fn(Arc<ServerGoalHandle<T>>),
+        handle_cancel: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
+        handle_accepted: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
