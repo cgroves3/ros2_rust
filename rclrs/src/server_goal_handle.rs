@@ -4,7 +4,7 @@ use rosidl_runtime_rs::{Action, GetResultService};
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
 use crate::vendor::action_msgs::msg::GoalStatus;
-use crate::{rcl_bindings::*, ActionServer};
+use crate::{rcl_bindings::*, ActionServer, ActionServerHandle};
 use crate::GoalUUID;
 
 
@@ -34,21 +34,21 @@ impl Drop for ServerGoalHandleHandle {
     }
 }
 
-pub struct ServerGoalHandle<'a, T>
+pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
     handle: Arc<ServerGoalHandleHandle>,
     pub(crate) result: <T as Action>::Result,
     pub(crate) goal: Arc<<T as Action>::Goal>,
-    publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
+    pub(crate) action_server_handle: Arc<ActionServerHandle>,
 }
 
-unsafe impl<T> Send for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Send for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
 
-unsafe impl<T> Sync for ServerGoalHandle<'_, T> where T: rosidl_runtime_rs::Action {}
+unsafe impl<T> Sync for ServerGoalHandle<T> where T: rosidl_runtime_rs::Action {}
 
-impl<'a, T> ServerGoalHandle<'a, T>
+impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
@@ -56,18 +56,18 @@ where
         handle: Arc<ServerGoalHandleHandle>,
         result: <T as Action>::Result,
         goal: Arc<<T as Action>::Goal>,
-        publish_feedback_cb: &'a dyn Fn(T::Feedback) -> Result<(), RclrsError>,
+        action_server_handle: Arc<ActionServerHandle>,
     ) -> Self {
         Self {
             handle,
             result: result,
             goal: Arc::clone(&goal),
-            publish_feedback_cb: publish_feedback_cb,
+            action_server_handle: action_server_handle,
         }
     }
 
     pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
-        (self.publish_feedback_cb)(feedback)
+        self.action_server_handle.publish_feedback::<T>(feedback)
     }
 
     pub fn get_state(&self) -> Result<i8, RclrsError> {

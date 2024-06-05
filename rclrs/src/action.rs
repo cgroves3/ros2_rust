@@ -78,6 +78,23 @@ impl ActionServerHandle {
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_server_t> {
         self.rcl_action_server_mtx.lock().unwrap()
     }
+
+    pub fn publish_feedback<T>(&self, message: T::Feedback) -> Result<(), RclrsError> 
+    where T: rosidl_runtime_rs::Action {
+        let rmw_message = <T::Feedback as Message>::into_rmw_message(message.into_cow());
+        let rcl_action_server = &mut *self.lock();
+        unsafe {
+            // SAFETY: The message type is guaranteed to match the publisher type by the type system.
+            // The message does not need to be valid beyond the duration of this function call.
+            // The third argument is explictly allowed to be NULL.
+            rcl_action_publish_feedback(
+                rcl_action_server,
+                rmw_message.as_ref() as *const <T::Feedback as Message>::RmwMsg as *mut _,
+            )
+            .ok()?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for ActionServerHandle {
@@ -91,27 +108,27 @@ impl Drop for ActionServerHandle {
     }
 }
 
-pub struct ActionServer<'a, T>
+pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
     pub(crate) goal_handles_mtx:
-        Arc<Mutex<HashMap<crate::action::GoalUUID, Weak<Mutex<ServerGoalHandle<'a, T>>>>>>,
+        Arc<Mutex<HashMap<crate::action::GoalUUID, Weak<Mutex<ServerGoalHandle<T>>>>>>,
     pub(crate) goal_results: Arc<
         Mutex<HashMap<crate::action::GoalUUID, Arc<<T::GetResult as GetResultService>::Response>>>,
     >,
     pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
-    handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<'a, T>>>) -> CancelResponse,
-    handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<'a, T>>>),
+    handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
+    handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
     goal_expired: Arc<AtomicBool>,
 }
 
-impl<'a, T> ActionServer<'a, T>
+impl<T> ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
@@ -124,8 +141,8 @@ where
         clock: Clock,
         qos: QoSProfile,
         handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<'a, T>>>) -> CancelResponse,
-        handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<'a, T>>>),
+        handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
+        handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
@@ -182,22 +199,6 @@ where
             result_request_ready: Arc::new(AtomicBool::new(false)),
             goal_expired: Arc::new(AtomicBool::new(false)),
         })
-    }
-
-    pub fn publish_feedback(&self, message: T::Feedback) -> Result<(), RclrsError> {
-        let rmw_message = <T::Feedback as Message>::into_rmw_message(message.into_cow());
-        let rcl_action_server = &mut *self.handle.lock();
-        unsafe {
-            // SAFETY: The message type is guaranteed to match the publisher type by the type system.
-            // The message does not need to be valid beyond the duration of this function call.
-            // The third argument is explictly allowed to be NULL.
-            rcl_action_publish_feedback(
-                rcl_action_server,
-                rmw_message.as_ref() as *const <T::Feedback as Message>::RmwMsg as *mut _,
-            )
-            .ok()?;
-        }
-        Ok(())
     }
 
     pub fn take_goal_request(
@@ -285,7 +286,7 @@ where
         ))
     }
 
-    pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
+pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
         let (goal_request, mut req_id) = match self.take_goal_request() {
             Ok((req, req_id)) => (req, req_id),
             Err(RclrsError::RclActionError {
@@ -346,15 +347,13 @@ where
             }
             self.publish_status()?;
 
-            let publish_feedback = &|feedback_msg: T::Feedback| self.publish_feedback(feedback_msg);
-
             let server_goal_handle_mtx = Arc::new(
                 Mutex::new(
                     ServerGoalHandle::<T>::new(
                         Arc::new(goal_handle_handle),
                         <T as Action>::Result::default(),
                         Arc::new(goal_request.get_goal::<T>()),
-                        publish_feedback
+                        self.handle.clone()
                     )
                 )
             );
@@ -620,49 +619,6 @@ where
         Ok(())
     }
 
-    // pub fn publish_result(
-    //     &self,
-    //     goal_uuid: &GoalUUID,
-    //     result: Arc<<T::GetResult as GetResultService>::Response>,
-    // ) -> Result<(), RclrsError> {
-    //     let goal_info = GoalInfoHandle::new(self.handle.clone());
-    //     goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
-    //     let server_handle = &*self.handle.lock();
-    //     let goal_info_handle = &*goal_info.lock();
-    //     let goal_exists = unsafe { rcl_action_server_goal_exists(server_handle, goal_info_handle) };
-    //     if !goal_exists {
-    //         panic!("Asked to publish result for goal that does not exist");
-    //     }
-    //     { self.goal_results.lock().unwrap() }.insert(goal_uuid.clone(), result.clone());
-    //     match Arc::into_inner(result) {
-    //         Some(res) => {
-    //             let result_rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
-    //             if let Some(req_ids) = { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
-    //             {
-    //                 type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
-    //                 for req_id in req_ids {
-    //                     unsafe {
-    //                         rcl_action_send_result_response(
-    //                             server_handle,
-    //                             req_id as *mut _,
-    //                             result_rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
-    //                         )
-    //                     }
-    //                     .ok()?;
-    //                 }
-    //             }
-    //         }
-    //         None => {
-    //             return Err(RclrsError::RclError {
-    //                 code: crate::RclReturnCode::Error,
-    //                 msg: None,
-    //             });
-    //         }
-    //     }
-
-    //     Ok(())
-    // }
-
     pub fn publish_result(
         &self,
         goal_uuid: &GoalUUID,
@@ -709,7 +665,7 @@ where
             Some(weak_handle) => {
                 match Weak::upgrade(&weak_handle) {
                     Some(goal_handle_arc) => {
-                        let cancel_cb_response = (self.handle_cancel_cb)(goal_handle_arc);
+                        let cancel_cb_response = (self.handle_cancel_cb)(goal_handle_arc.clone());
                         match cancel_cb_response {
                             CancelResponse::Accept => {
                                 let goal_handle = goal_handle_arc.lock().unwrap();
@@ -772,7 +728,7 @@ pub trait ActionServerBase: Send + Sync {
     fn is_ready(&self, wait_set: &mut rcl_wait_set_t) -> bool;
 }
 
-impl<T> ActionServerBase for ActionServer<'_, T>
+impl<T> ActionServerBase for ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
