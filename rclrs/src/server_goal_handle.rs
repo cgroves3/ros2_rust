@@ -1,13 +1,12 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rosidl_runtime_rs::{Action, GetResultService};
+use rosidl_runtime_rs::Action;
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
 use crate::vendor::action_msgs::msg::GoalStatus;
-use crate::{rcl_bindings::*, ActionServer, ActionServerHandle};
-use crate::GoalUUID;
+use crate::{rcl_bindings::*, ActionServerHandle};
 
-
+/// Internal handle for the C rcl_action_goal_handle_t used by the ServerGoalHandle
 pub struct ServerGoalHandleHandle {
     rcl_goal_handle_mtx: Mutex<*mut rcl_action_goal_handle_t>
 }
@@ -34,6 +33,7 @@ impl Drop for ServerGoalHandleHandle {
     }
 }
 
+/// The ServerGoalHandle tracked by the ActionServer
 pub struct ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
@@ -52,7 +52,10 @@ impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
-    pub fn new(
+    pub const TERMINAL_STATES: [i8; 3] = [GoalStatus::STATUS_ABORTED, GoalStatus::STATUS_SUCCEEDED, GoalStatus::STATUS_CANCELED];
+
+    /// Creates a new goal for the server
+    pub(crate) fn new(
         handle: Arc<ServerGoalHandleHandle>,
         result: <T as Action>::Result,
         goal: Arc<<T as Action>::Goal>,
@@ -66,38 +69,45 @@ where
         }
     }
 
+    /// Publish feedback to the ROS clients
     pub fn publish_feedback(&self, feedback: T::Feedback) -> Result<(), RclrsError> {
         self.action_server_handle.publish_feedback::<T>(feedback)
     }
 
-    pub fn get_state(&self) -> Result<i8, RclrsError> {
+
+    /// Gets the current status of the goal as an i8, representing the GoalStatus
+    pub(crate) fn get_status(&self) -> Result<i8, RclrsError> {
         let goal_handle = self.handle.lock();
-        let state = &mut GoalStatus::STATUS_UNKNOWN;
-        unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *state) }.ok()?;
-        Ok(*state)
+        let status = &mut GoalStatus::STATUS_UNKNOWN;
+        unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *status) }.ok()?;
+        Ok(*status)
     }
 
+    /// Checks if the current goal status is canceling
     pub fn is_canceling(&self) -> bool {
-        match self.get_state() {
+        match self.get_status() {
             Ok(state) => GoalStatus::STATUS_CANCELING == state,
             Err(..) => false
         }
     }
 
+    /// Checks if the goal handle is still active
     pub fn is_active(&self) -> bool {
         let handle = self.handle.lock();
         unsafe { rcl_action_goal_handle_is_active(*handle as *const _) }
     }
 
+    /// Checks if the goal handle is still executing
     pub fn is_executing(&self) -> bool {
-        match self.get_state() {
+        match self.get_status() {
             Ok(state) => GoalStatus::STATUS_EXECUTING == state,
             Err(..) => false
         }
     }
 
-    //TODO: Is `result` needed for these methods?
-    pub fn abort(&self) -> Result<(), RclrsError> {
+    /// Marks the goal as aborted
+    pub fn abort(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+        self.result = result;
         let handle = self.handle.lock();
         unsafe { 
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_ABORT) 
@@ -106,7 +116,9 @@ where
         Ok(())
     }
 
-    pub fn succeed(&self) -> Result<(), RclrsError> {
+    /// Marks the goal as succeeded
+    pub fn succeed(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+        self.result = result;
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
@@ -115,7 +127,8 @@ where
         Ok(())
     }
 
-    pub fn cancel_goal(&self) -> Result<(), RclrsError> {
+    /// Marks the goal as starting to be cancelled
+    pub(crate) fn cancel_goal(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
@@ -124,7 +137,9 @@ where
         Ok(())
     }
 
-    pub fn canceled(&self) -> Result<(), RclrsError> {
+    /// Marks the goal as cancelled
+    pub fn canceled(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+        self.result = result;
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
@@ -133,6 +148,7 @@ where
         Ok(())
     }
 
+    /// Marks the goal as executing
     pub fn execute(&self) -> Result<(), RclrsError> {
         let handle = self.handle.lock();
         unsafe {
@@ -142,7 +158,8 @@ where
         Ok(())
     }
 
-    pub fn try_canceling(&self) -> bool {
+    /// Tries to cancel the goal handle
+    pub(crate) fn try_canceling(&self) -> bool {
         let handle = self.handle.lock();
         let is_cancelable = unsafe { rcl_action_goal_handle_is_cancelable(*handle) };
         if is_cancelable {
@@ -153,7 +170,7 @@ where
         }
 
         // Default state is STATUS_UNKNOWN
-        match self.get_state() {
+        match self.get_status() {
             Ok(state) => {
                 if state == GoalStatus::STATUS_CANCELING {
                     let ret = unsafe { rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED) };

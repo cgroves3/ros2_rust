@@ -58,13 +58,6 @@ pub struct ReadyEntities {
     pub servers: Vec<Arc<dyn ActionServerBase>>,
 }
 
-pub struct ServerEntities {
-    pub goal_request_ready: bool,
-    pub cancel_request_ready: bool,
-    pub result_request_ready: bool,
-    pub goal_expired: bool,
-}
-
 impl Drop for rcl_wait_set_t {
     fn drop(&mut self) {
         // SAFETY: No preconditions for this function (besides passing in a valid wait set).
