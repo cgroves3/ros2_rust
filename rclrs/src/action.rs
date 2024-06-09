@@ -324,7 +324,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
             user_response,
             GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer
         ) {
-            let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
+            let goal_info_handle = GoalInfoHandle::new();
             let uuid = GoalUUID::new(goal_request.get_goal_id());
             goal_info_handle
                 .lock()
@@ -357,32 +357,30 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
                     )
                 )
             );
-            
             (self.handle_accepted_cb)(server_goal_handle_mtx.clone());
-            {
-                let goal_handle_state = { server_goal_handle_mtx.lock().unwrap() }.get_status()?;
-                if ServerGoalHandle::TERMINAL_STATES.contains(&goal_handle_state) {
-                    type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
-                    let result_response = Response::<T>::default();
-                    result_response.set_status(goal_handle_state);
-                    let server_goal_handle_unwrapped = Arc::try_unwrap(server_goal_handle_mtx);
-                    match server_goal_handle_unwrapped {
-                        Ok(handle_mtx) => {
-                            let server_goal_handle = handle_mtx.into_inner().unwrap();
-                            result_response.set_result::<T>(server_goal_handle.result);
-                            self.publish_result(&uuid, result_response);
-                            self.publish_status();
-                            self.notify_goal_terminal_state();
-                        }
-                        Err(server_goal_handle_failed_mtx) => {
-                        }
+            
+            let goal_status = { server_goal_handle_mtx.lock().unwrap() }.get_status()?;
+            if ServerGoalHandle::<T>::TERMINAL_STATES.contains(&goal_status) {
+                let server_goal_handle_unwrapped = Arc::try_unwrap(server_goal_handle_mtx);
+                match server_goal_handle_unwrapped {
+                    Ok(handle_mtx) => {
+                        let server_goal_handle = handle_mtx.into_inner().unwrap();
+                        type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
+                        let result_response = Response::<T>::default();
+                        result_response.set_status(goal_status);
+                        result_response.set_result::<T>(server_goal_handle.result);
+                        self.publish_result(&uuid, result_response);
+                        self.publish_status();
+                        self.notify_goal_terminal_state();
                     }
-                } else {
-                    { self.goal_handles_mtx.lock().unwrap() }.insert(uuid.clone(), server_goal_handle_mtx);
+                    Err(server_goal_handle_failed_mtx) => {
+                    }
                 }
-                if goal_handle_state == GoalStatus::STATUS_EXECUTING {
-                    self.publish_status();
-                }
+            } else {
+                { self.goal_handles_mtx.lock().unwrap() }.insert(uuid.clone(), server_goal_handle_mtx);
+            }
+            if goal_status == GoalStatus::STATUS_EXECUTING {
+                self.publish_status();
             }
         }
         Ok(())
@@ -503,7 +501,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
         // TODO: Convert the result_request uuid to a uuid
         // let goal_uuid = result_request.uuid;
         let goal_uuid = GoalUUID::new(result_request.get_goal_id());
-        let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
+        let goal_info_handle = GoalInfoHandle::new();
 
         let handle = &*self.handle.lock();
         let goal_exists =
@@ -566,7 +564,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
     }
 
     pub fn execute_check_expired_goals(&self) -> Result<(), RclrsError> {
-        let goal_info_handle = GoalInfoHandle::new(self.handle.clone());
+        let goal_info_handle = GoalInfoHandle::new();
         let mut num_expired: usize = 1;
         while num_expired > 0 {
             let handle = &*self.handle.lock();
@@ -640,7 +638,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
         goal_uuid: &GoalUUID,
         result: <T::GetResult as GetResultService>::Response,
     ) -> Result<(), RclrsError> {
-        let goal_info = GoalInfoHandle::new(self.handle.clone());
+        let goal_info = GoalInfoHandle::new();
         goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
         let server_handle = &*self.handle.lock();
         let goal_info_handle = &*goal_info.lock();
@@ -699,16 +697,14 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
 }
 
 pub struct GoalInfoHandle {
-    rcl_action_goal_info_mtx: Mutex<rcl_action_goal_info_t>,
-    rcl_action_server: Arc<ActionServerHandle>,
+    rcl_action_goal_info_mtx: Mutex<rcl_action_goal_info_t>
 }
 
 impl GoalInfoHandle {
-    pub fn new(rcl_action_server: Arc<ActionServerHandle>) -> Self {
+    pub fn new() -> Self {
         let goal_info = unsafe { rcl_action_get_zero_initialized_goal_info() };
         Self {
-            rcl_action_goal_info_mtx: Mutex::new(goal_info),
-            rcl_action_server,
+            rcl_action_goal_info_mtx: Mutex::new(goal_info)
         }
     }
 

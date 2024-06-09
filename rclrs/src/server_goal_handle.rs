@@ -4,7 +4,7 @@ use rosidl_runtime_rs::Action;
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
 use crate::vendor::action_msgs::msg::GoalStatus;
-use crate::{rcl_bindings::*, ActionServerHandle};
+use crate::{rcl_bindings::*, ActionServerHandle, GoalUUID};
 
 /// Internal handle for the C rcl_action_goal_handle_t used by the ServerGoalHandle
 pub struct ServerGoalHandleHandle {
@@ -74,7 +74,6 @@ where
         self.action_server_handle.publish_feedback::<T>(feedback)
     }
 
-
     /// Gets the current status of the goal as an i8, representing the GoalStatus
     pub(crate) fn get_status(&self) -> Result<i8, RclrsError> {
         let goal_handle = self.handle.lock();
@@ -106,7 +105,7 @@ where
     }
 
     /// Marks the goal as aborted
-    pub fn abort(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+    pub fn abort(&mut self, result: <T as Action>::Result) -> Result<(), RclrsError> {
         self.result = result;
         let handle = self.handle.lock();
         unsafe { 
@@ -117,11 +116,22 @@ where
     }
 
     /// Marks the goal as succeeded
-    pub fn succeed(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+    pub fn succeed(&mut self, result: <T as Action>::Result) -> Result<(), RclrsError> {
         self.result = result;
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_SUCCEED)
+        }
+        .ok()?;
+        Ok(())
+    }
+
+    /// Marks the goal as cancelled
+    pub fn canceled(&mut self, result: <T as Action>::Result) -> Result<(), RclrsError> {
+        self.result = result;
+        let handle = self.handle.lock();
+        unsafe {
+            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
         Ok(())
@@ -132,17 +142,6 @@ where
         let handle = self.handle.lock();
         unsafe {
             rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCEL_GOAL)
-        }
-        .ok()?;
-        Ok(())
-    }
-
-    /// Marks the goal as cancelled
-    pub fn canceled(&self, result: <T as Action>::Result) -> Result<(), RclrsError> {
-        self.result = result;
-        let handle = self.handle.lock();
-        unsafe {
-            rcl_action_update_goal_state(*handle, rcl_action_goal_event_e::GOAL_EVENT_CANCELED)
         }
         .ok()?;
         Ok(())
