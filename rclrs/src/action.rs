@@ -358,7 +358,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
                 )
             );
             (self.handle_accepted_cb)(server_goal_handle_mtx.clone());
-            
+
             let goal_status = { server_goal_handle_mtx.lock().unwrap() }.get_status()?;
             if ServerGoalHandle::<T>::TERMINAL_STATES.contains(&goal_status) {
                 let server_goal_handle_unwrapped = Arc::try_unwrap(server_goal_handle_mtx);
@@ -369,9 +369,9 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
                         let result_response = Response::<T>::default();
                         result_response.set_status(goal_status);
                         result_response.set_result::<T>(server_goal_handle.result);
-                        self.publish_result(&uuid, result_response);
-                        self.publish_status();
-                        self.notify_goal_terminal_state();
+                        self.publish_result(&uuid, result_response)?;
+                        self.publish_status()?;
+                        self.notify_goal_terminal_state()?;
                     }
                     Err(server_goal_handle_failed_mtx) => {
                     }
@@ -380,7 +380,7 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
                 { self.goal_handles_mtx.lock().unwrap() }.insert(uuid.clone(), server_goal_handle_mtx);
             }
             if goal_status == GoalStatus::STATUS_EXECUTING {
-                self.publish_status();
+                self.publish_status()?;
             }
         }
         Ok(())
