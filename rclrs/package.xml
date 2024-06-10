@@ -21,7 +21,7 @@
   <depend>rcl_interfaces</depend>
   <depend>rosgraph_msgs</depend>
   <depend>unique_identifier_msgs</depend>
-  <!-- <depend>example_interfaces</depend> -->
+  <depend>example_interfaces</depend>
 
   <export>
     <build_type>ament_cargo</build_type>

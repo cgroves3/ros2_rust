@@ -177,15 +177,20 @@ pub trait HasGoal {
 /// Trait for setting a GoalStatus
 pub trait Status {
     /// Method to set the goal status
-    fn set_status(&self, goal_status: i8) -> ();
+    fn set_status(&mut self, goal_status: i8) -> ();
 }
 
 /// Trait for setting an Action Result
 pub trait SetResult {
     /// Method to set the result
-    fn set_result<A: Action>(&self, result: <A as Action>::Result) -> ();
+    fn set_result<A: Action>(&mut self, result: <A as Action>::Result) -> ();
 }
 
+
+pub trait Accepted {
+    fn accepted(&self) -> bool;
+    fn set_accepted(&mut self, accepted: bool);
+}
 
 /// Trait for Action's SendGoalService.
 ///
@@ -195,7 +200,7 @@ pub trait SendGoalService : Service {
     type Request: Message + HasGoalId + HasGoal;
 
     /// The response message associated with this service.
-    type Response: Message;
+    type Response: Message + Accepted;
 }
 
 /// Trait for Action's GetResultService.

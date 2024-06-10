@@ -1,5 +1,5 @@
 use rosidl_runtime_rs::{
-    Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
+    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
 };
 
 use std::collections::HashMap;
@@ -304,26 +304,26 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
         let uuid = GoalUUID::new(goal_request.get_goal_id());
         let user_response = (self.handle_goal_cb)(&uuid, goal);
 
-        type RmwMsg<T> =
-            <<<T as Action>::SendGoal as Service>::Response as rosidl_runtime_rs::Message>::RmwMsg;
-        let goal_response = RmwMsg::<T>::default();
-        //TODO: Set the SendGoalResponse.accepted field to GoalResponse::ACCEPT_AND_EXECUTE == user_response || GoalResponse::ACCEPT_AND_DEFER == user_response;
-        // per rclcpp
+        type Response<T> = <<T as Action>::SendGoal as SendGoalService>::Response;
+        let mut goal_response = Response::<T>::default();
+        let goal_accepted = matches!(
+            user_response,
+            GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer
+        );
+        goal_response.set_accepted(goal_accepted);
+        let goal_response_rmw = <Response::<T> as Message>::into_rmw_message(goal_response.into_cow());
         let handle = &*self.handle.lock();
         unsafe {
             // SAFETY: The response type is guaranteed to match the service type by the type system.
             rcl_action_send_goal_response(
                 handle,
                 &mut req_id,
-                &goal_response as *const RmwMsg<T> as *mut _,
+                goal_response_rmw.as_ref() as *const <Response::<T> as Message>::RmwMsg as *mut _,
             )
         }
         .ok()?;
 
-        if matches!(
-            user_response,
-            GoalResponse::AcceptAndExecute | GoalResponse::AcceptAndDefer
-        ) {
+        if goal_accepted {
             let goal_info_handle = GoalInfoHandle::new();
             let uuid = GoalUUID::new(goal_request.get_goal_id());
             goal_info_handle
@@ -366,8 +366,10 @@ pub fn execute_goal_request_received(&self) -> Result<(), RclrsError> {
                     Ok(handle_mtx) => {
                         let server_goal_handle = handle_mtx.into_inner().unwrap();
                         type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
-                        let result_response = Response::<T>::default();
+                        let mut result_response = Response::<T>::default();
                         result_response.set_status(goal_status);
+                        // TODO: Refactor to move publish_result and associated data structures to ActionServerHandle
+                        // That way the result doesn't need to be set and the server_goal_handle doesn't need to be owned.
                         result_response.set_result::<T>(server_goal_handle.result);
                         self.publish_result(&uuid, result_response)?;
                         self.publish_status()?;
