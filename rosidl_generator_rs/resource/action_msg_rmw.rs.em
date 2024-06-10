@@ -118,12 +118,12 @@ impl rosidl_runtime_rs::HasGoalId for @(type_name) {
 @[    if get_rs_name(member.name) == "goal" ]@
 impl rosidl_runtime_rs::HasGoal for @(type_name) {
     type Goal = @(get_rmw_rs_type(member.type)),
-    fn get_@(get_rs_name(member.name))(&self): @(get_rmw_rs_type(member.type)),
+    fn get_@(get_rs_name(member.name))(&self) -> @(get_rmw_rs_type(member.type)),
 }
 @[        end if]@
 @[end for]@
 
-@#    // TODO: Fix this
+
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "status" ]@
 impl rosidl_runtime_rs::Status for @(type_name) {

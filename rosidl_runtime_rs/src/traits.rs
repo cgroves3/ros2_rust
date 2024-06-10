@@ -186,7 +186,7 @@ pub trait SetResult {
     fn set_result<A: Action>(&mut self, result: <A as Action>::Result) -> ();
 }
 
-
+/// Trait for setting and getting an accepted state
 pub trait Accepted {
     fn accepted(&self) -> bool;
     fn set_accepted(&mut self, accepted: bool);

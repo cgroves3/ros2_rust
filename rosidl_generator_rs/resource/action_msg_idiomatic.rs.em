@@ -244,12 +244,11 @@ impl rosidl_runtime_rs::HasGoalId for @(type_name) {
 @[    if get_rs_name(member.name) == "goal" ]@
 impl rosidl_runtime_rs::HasGoal for @(type_name) {
     type Goal = @(get_idiomatic_rs_type(member.type)),
-    fn get_@(get_rs_name(member.name))(&self): @(get_idiomatic_rs_type(member.type)),
+    fn get_@(get_rs_name(member.name))(&self) -> @(get_idiomatic_rs_type(member.type)),
 }
 @[        end if]@
 @[end for]@
 
-@#    // TODO: Fix this
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "status" ]@
 impl rosidl_runtime_rs::Status for @(type_name) {
@@ -258,7 +257,6 @@ impl rosidl_runtime_rs::Status for @(type_name) {
 @[        end if]@
 @[end for]@
 
-@#    // TODO: Fix this
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "result" ]@
 impl rosidl_runtime_rs::SetResult for @(type_name) {
@@ -267,7 +265,6 @@ impl rosidl_runtime_rs::SetResult for @(type_name) {
 @[        end if]@
 @[end for]@
 
-@#    // TODO: Fix this
 @[for member in msg_spec.structure.members]@
 @[    if get_rs_name(member.name) == "accepted" ]@
 impl rosidl_runtime_rs::Accepted for @(type_name) {
