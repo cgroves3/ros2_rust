@@ -12,12 +12,14 @@ pub struct ServerGoalHandleHandle {
 }
 
 impl ServerGoalHandleHandle {
+    /// Creates a new server goal handle 
     pub fn new(goal_handle_mtx: Mutex<*mut rcl_action_goal_handle_t>) -> Self {
         Self { 
             rcl_goal_handle_mtx: goal_handle_mtx 
         }
     }
 
+    /// Locks and unwraps a new server goal handle 
     pub(crate) fn lock(&self) -> MutexGuard<*mut rcl_action_goal_handle_t> {
         self.rcl_goal_handle_mtx.lock().unwrap()
     }
@@ -52,6 +54,7 @@ impl<T> ServerGoalHandle<T>
 where
     T: rosidl_runtime_rs::Action,
 {
+    /// The server goal handles terminal states
     pub const TERMINAL_STATES: [i8; 3] = [GoalStatus::STATUS_ABORTED, GoalStatus::STATUS_SUCCEEDED, GoalStatus::STATUS_CANCELED];
 
     /// Creates a new goal for the server
