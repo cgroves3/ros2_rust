@@ -1,10 +1,10 @@
 use rosidl_runtime_rs::{
-    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
+    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, SetResult, Status
 };
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard, Weak};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
 use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
@@ -40,14 +40,19 @@ impl GoalUUID {
 
 /// The goal response states
 pub enum GoalResponse {
+    /// The reject goal response state
     Reject = 1,
+    /// The accept and execute goal response state
     AcceptAndExecute = 2,
+    /// The accept and defer goal response state
     AcceptAndDefer = 3,
 }
 
 /// The cancel response states
 pub enum CancelResponse {
+    /// The reject cancel response state
     Reject = 1,
+    /// The accept cancel response state
     Accept = 2,
 }
 
@@ -79,14 +84,16 @@ where
 pub struct ActionServerHandle {
     rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
-    pub(crate) in_use_by_wait_set: Arc<AtomicBool>,
+    pub(crate) in_use_by_wait_set: Arc<AtomicBool>
 }
 
 impl ActionServerHandle {
+    /// Locks and unwraps the action server
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_server_t> {
         self.rcl_action_server_mtx.lock().unwrap()
     }
-
+    
+    /// Publishes the feedback message
     pub fn publish_feedback<T>(&self, message: T::Feedback) -> Result<(), RclrsError> 
     where T: rosidl_runtime_rs::Action {
         let rmw_message = <T::Feedback as Message>::into_rmw_message(message.into_cow());
@@ -451,7 +458,7 @@ where
             let mut uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
             uuid.0.copy_from_slice(&goal_info.goal_id.uuid);
             let cb_response_code = self.call_handle_cancel_callback(uuid);
-            if matches!(CancelResponse::Accept, cb_response_code) {
+            if matches!(cb_response_code, CancelResponse::Accept) {
                 let mut rs_goal_info = GoalInfo::default();
                 rs_goal_info
                     .goal_id
@@ -548,26 +555,6 @@ where
                     )
                 }
                 .ok()?;
-                // let sent_response = <<<T as Action>::GetResult as GetResultService>::Response as Message>::from_rmw_message(rmw_message.into_owned());
-                // { self.goal_results.lock().unwrap() }.insert(goal_uuid, sent_response);
-
-                // match Weak::upgrade(&result_response) {
-                //     Some(res_mtx) => {
-                //         let res = res_mtx.lock().unwrap();
-                //         let rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(res.into_cow());
-                //         unsafe {
-                //             rcl_action_send_result_response(
-                //                 handle,
-                //                 &mut req_id,
-                //                 rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
-                //             )
-                //         }
-                //         .ok()?;
-                //         let sent_response = <<<T as Action>::GetResult as GetResultService>::Response as Message>::from_rmw_message(rmw_message.into_owned());
-                //         { self.goal_results.lock().unwrap() }.insert(goal_uuid, sent_response);
-                //     }
-                //     None => {}
-                // }
             } else {
                 if let Some(request_headers) =
                     { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)

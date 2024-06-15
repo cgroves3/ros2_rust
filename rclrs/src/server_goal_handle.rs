@@ -4,7 +4,7 @@ use rosidl_runtime_rs::Action;
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
 use crate::vendor::action_msgs::msg::GoalStatus;
-use crate::{rcl_bindings::*, ActionServerHandle, GoalUUID};
+use crate::{rcl_bindings::*, ActionServerHandle};
 
 /// Internal handle for the C rcl_action_goal_handle_t used by the ServerGoalHandle
 pub struct ServerGoalHandleHandle {
