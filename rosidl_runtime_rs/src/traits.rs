@@ -188,7 +188,9 @@ pub trait SetResult {
 
 /// Trait for setting and getting an accepted state
 pub trait Accepted {
+    /// Gets the accepted value
     fn accepted(&self) -> bool;
+    /// Sets the accepted value
     fn set_accepted(&mut self, accepted: bool);
 }
 
