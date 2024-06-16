@@ -9,7 +9,9 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
+// TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
 use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
+// TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::Clock;
 use crate::{rcl_bindings::*, MessageCow};

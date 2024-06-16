@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rosidl_runtime_rs::Action;
 
 use crate::error::{RclReturnCode, RclrsError, ToResult};
+// TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
 use crate::vendor::action_msgs::msg::GoalStatus;
 use crate::{rcl_bindings::*, ActionServerHandle};
 
