@@ -10,8 +10,6 @@ use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
 // TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
-use crate::vendor::action_msgs::msg::{GoalInfo, GoalStatus, GoalStatusArray};
-// TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
 use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::Clock;
 use crate::{rcl_bindings::*, MessageCow};
@@ -27,6 +25,11 @@ unsafe impl Send for rcl_action_goal_handle_t {}
 unsafe impl Sync for rcl_action_goal_handle_t {}
 
 use std::marker::PhantomData;
+
+mod goal_info;
+mod goal_status;
+pub use goal_info::*;
+pub use goal_status::*;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 
