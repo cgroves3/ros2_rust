@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use crate::rcl_bindings::*;
 
+/// Handle the goal status
 pub struct GoalStatus {
     rcl_action_goal_status_mtx: Arc<Mutex<rcl_action_goal_status_t>>
 }
@@ -23,6 +24,28 @@ impl GoalStatus {
     pub const STATUS_ABORTED: i8 = 6;
 }
 
+/// Handle the goal status array
 pub struct GoalStatusArray {
     rcl_action_goal_status_mtx: Arc<Mutex<rcl_action_goal_status_array_t>>
+}
+
+impl GoalStatusArray {
+    pub fn new(rcl_action_goal_status_array: rcl_action_goal_status_array_t) -> Self {
+        Self {
+            rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status_array))
+        }
+    }
+
+    /// Locks and unwraps the cancel response handle
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_array_t> {
+        self.rcl_action_goal_status_mtx.lock().unwrap()
+    }
+}
+
+impl Drop for GoalStatusArray {
+    fn drop(&mut self) {
+        unsafe { 
+            rcl_action_goal_status_array_fini(&mut *self.rcl_action_goal_status_mtx.get_mut().unwrap()); 
+        }
+    }
 }

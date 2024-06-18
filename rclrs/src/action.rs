@@ -9,8 +9,6 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
-// TODO: these may need to be implemented manually using the rcl_bindings. It's not clear when crate::vendor:: is supposed to be used.
-use crate::vendor::action_msgs::srv::{CancelGoal_Request, CancelGoal_Response};
 use crate::Clock;
 use crate::{rcl_bindings::*, MessageCow};
 
@@ -28,8 +26,10 @@ use std::marker::PhantomData;
 
 mod goal_info;
 mod goal_status;
+mod cancel;
 pub use goal_info::*;
 pub use goal_status::*;
+pub use cancel::*;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 
@@ -287,23 +287,23 @@ where
     /// Takes a cancel request
     pub fn take_cancel_request(
         &self,
-    ) -> Result<(CancelGoal_Request, rmw_request_id_t), RclrsError> {
+    ) -> Result<(CancelRequestHandle, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        let mut request_out = <CancelGoal_Request as Message>::RmwMsg::default();
+        let mut rcl_action_cancel_request = unsafe { rcl_action_get_zero_initialized_cancel_request() };
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
                 &mut request_id_out,
-                &mut request_out as *mut <CancelGoal_Request as Message>::RmwMsg as *mut _,
+                &mut rcl_action_cancel_request,
             )
             .ok()?
         }
         Ok((
-            CancelGoal_Request::from_rmw_message(request_out),
+            CancelRequestHandle::new(rcl_action_cancel_request),
             request_id_out,
         ))
     }
@@ -422,7 +422,7 @@ where
 
     /// Takes a cancel request and processes it
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError> {
-        let (cancel_request, mut req_id) = match self.take_cancel_request() {
+        let (cancel_request_handle, mut req_id) = match self.take_cancel_request() {
             Ok((req, req_id)) => (req, req_id),
             Err(RclrsError::RclActionError {
                 code: RclActionReturnCode::ActionServerTakeFailed,
@@ -434,7 +434,6 @@ where
             }
             Err(e) => return Err(e),
         };
-        let cancel_request_handle = CancelRequestHandle::new();
         {cancel_request_handle.lock()}.goal_info.goal_id.uuid.copy_from_slice(&cancel_request.goal_info.goal_id.uuid);
         {cancel_request_handle.lock()}.goal_info.stamp.sec = cancel_request.goal_info.stamp.sec;
         {cancel_request_handle.lock()}.goal_info.stamp.nanosec = cancel_request.goal_info.stamp.nanosec;
@@ -598,15 +597,15 @@ where
         let goal_handles = std::ptr::null_mut();
         let handle = &*self.handle.lock();
         unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, &mut num_goals) }.ok()?;
-        let mut goal_status_array = GoalStatusArray::default();
+        let mut rcl_goal_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
+        let mut goal_status_array = GoalStatusArray::new(rcl_goal_status_array);
         goal_status_array.status_list.reserve(num_goals);
-        let mut c_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
-        unsafe { rcl_action_get_goal_status_array(handle, &mut c_status_array) }.ok()?;
-        unsafe { rcl_action_goal_status_array_fini(&mut c_status_array) }.ok()?;
+        let goal_status_array_handle = goal_status_array.lock();
+        unsafe { rcl_action_get_goal_status_array(handle, &mut rcl_goal_status_array) }.ok()?;
         let status_array_slice = unsafe {
             std::slice::from_raw_parts(
-                c_status_array.msg.status_list.data,
-                c_status_array.msg.status_list.size,
+                rcl_goal_status_array.msg.status_list.data,
+                rcl_goal_status_array.msg.status_list.size,
             )
         };
         for i in 0..status_array_slice.len() {
@@ -811,54 +810,5 @@ where
             || self.cancel_request_ready.load(Ordering::SeqCst)
             || self.result_request_ready.load(Ordering::SeqCst)
             || self.goal_expired.load(Ordering::SeqCst)
-    }
-}
-
-/// The cancel request handle
-pub struct CancelRequestHandle {
-    rcl_action_cancel_request_mtx: Mutex<rcl_action_cancel_request_t>,
-}
-
-impl CancelRequestHandle {
-    /// Creates a new cancel request handle
-    pub fn new() -> Self {
-        let rcl_action_cancel_req = unsafe { rcl_action_get_zero_initialized_cancel_request() };
-        Self {
-            rcl_action_cancel_request_mtx: Mutex::new(rcl_action_cancel_req),
-        }
-    }
-
-    /// Locks and unwraps the cancel request handle
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_request_t> {
-        self.rcl_action_cancel_request_mtx.lock().unwrap()
-    }
-}
-
-/// The cancel response handle
-pub struct CancelResponseHandle {
-    rcl_action_cancel_response_mtx: Mutex<rcl_action_cancel_response_t>,
-}
-impl CancelResponseHandle {
-    /// Creates a new cancel response handle
-    pub fn new() -> Self {
-        let rcl_action_cancel_response =
-            unsafe { rcl_action_get_zero_initialized_cancel_response() };
-        Self {
-            rcl_action_cancel_response_mtx: Mutex::new(rcl_action_cancel_response),
-        }
-    }
-
-    /// Locks and unwraps the cancel response handle
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_cancel_response_t> {
-        self.rcl_action_cancel_response_mtx.lock().unwrap()
-    }
-}
-
-impl Drop for CancelResponseHandle {
-    fn drop(&mut self) {
-        let cancel_response = &mut *self.rcl_action_cancel_response_mtx.get_mut().unwrap();
-        unsafe {
-            rcl_action_cancel_response_fini(cancel_response);
-        }
     }
 }
