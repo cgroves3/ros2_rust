@@ -1,5 +1,5 @@
 use rosidl_runtime_rs::{
-    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, SetResult, Status
+    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
 };
 
 use std::collections::HashMap;
@@ -287,23 +287,27 @@ where
     /// Takes a cancel request
     pub fn take_cancel_request(
         &self,
-    ) -> Result<(CancelRequestHandle, rmw_request_id_t), RclrsError> {
+    ) -> Result<(<T::CancelGoal as Service>::Request, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
-        let mut rcl_action_cancel_request = unsafe { rcl_action_get_zero_initialized_cancel_request() };
+
+        type RmwMsg<T> =
+            <<<T as Action>::CancelGoal as Service>::Request as rosidl_runtime_rs::Message>::RmwMsg;
+        
+        let mut request_out = RmwMsg::<T>::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
                 &mut request_id_out,
-                &mut rcl_action_cancel_request,
+                &mut request_out as *mut RmwMsg<T> as *mut _,
             )
             .ok()?
         }
         Ok((
-            CancelRequestHandle::new(rcl_action_cancel_request),
+            <T::CancelGoal as Service>::Request::from_rmw_message(request_out),
             request_id_out,
         ))
     }
@@ -422,7 +426,7 @@ where
 
     /// Takes a cancel request and processes it
     pub fn execute_cancel_request_received(&self) -> Result<(), RclrsError> {
-        let (cancel_request_handle, mut req_id) = match self.take_cancel_request() {
+        let (cancel_request, mut req_id) = match self.take_cancel_request() {
             Ok((req, req_id)) => (req, req_id),
             Err(RclrsError::RclActionError {
                 code: RclActionReturnCode::ActionServerTakeFailed,
@@ -434,6 +438,7 @@ where
             }
             Err(e) => return Err(e),
         };
+        let cancel_request_handle = CancelRequestHandle::new();
         {cancel_request_handle.lock()}.goal_info.goal_id.uuid.copy_from_slice(&cancel_request.goal_info.goal_id.uuid);
         {cancel_request_handle.lock()}.goal_info.stamp.sec = cancel_request.goal_info.stamp.sec;
         {cancel_request_handle.lock()}.goal_info.stamp.nanosec = cancel_request.goal_info.stamp.nanosec;
@@ -445,11 +450,11 @@ where
             rcl_action_process_cancel_request(handle, request_handle, response_handle as *mut _)
         }
         .ok()?;
-        let response_mtx = Arc::new(Mutex::new(CancelGoal_Response::default()));
-        {
-            let mut response = response_mtx.lock().unwrap();
-            response.return_code = response_handle.msg.return_code;
-        }
+        // let response_mtx = Arc::new(Mutex::new(CancelResponseHandle::new()));
+        // {
+        //     let mut response = response_mtx.lock().unwrap();
+        //     response.return_code = response_handle.msg.return_code;
+        // }
         let goals = unsafe {
             std::slice::from_raw_parts(
                 response_handle.msg.goals_canceling.data,
@@ -463,7 +468,8 @@ where
             uuid.0.copy_from_slice(&goal_info.goal_id.uuid);
             let cb_response_code = self.call_handle_cancel_callback(uuid);
             if matches!(cb_response_code, CancelResponse::Accept) {
-                let mut rs_goal_info = GoalInfo::default();
+                let mut goal_info = GoalInfo::new();
+                let mut rs_goal_info = goal_info.lock();
                 rs_goal_info
                     .goal_id
                     .uuid
@@ -471,7 +477,7 @@ where
                 rs_goal_info.stamp.sec = goal_info.stamp.sec;
                 rs_goal_info.stamp.nanosec = goal_info.stamp.nanosec;
                 {
-                    let mut response = response_mtx.lock().unwrap();
+                    let mut response = cancel_response_handle.lock();
                     response.goals_canceling.push(rs_goal_info);
                 }
             }
@@ -480,7 +486,7 @@ where
         // If the user rejects all individual requests to cancel goals,
         // then we consider the top-level cancel request as rejected.
         {
-            let mut response = response_mtx.lock().unwrap();
+            let mut response = cancel_response_handle.lock().unwrap();
             if goals.len() >= 1 && 0 == response.goals_canceling.len() {
                 response.return_code = CancelResponse::Reject as i8;
             }
@@ -493,16 +499,13 @@ where
         }
 
         {
-            let response = response_mtx.lock().unwrap();
-            let response_cow = response.clone().into_cow();
-            let rmw_message = <CancelGoal_Response as Message>::into_rmw_message(response_cow);
+            let mut response = &mut *cancel_response_handle.lock().unwrap();
             unsafe {
                 // SAFETY: The response type is guaranteed to match the service type by the type system.
                 rcl_action_send_cancel_response(
                     handle,
                     &mut req_id,
-                    rmw_message.as_ref() as *const <CancelGoal_Response as Message>::RmwMsg
-                        as *mut _,
+                    response as *mut _,
                 )
             }
         }

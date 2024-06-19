@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
-use crate::rcl_bindings::*;
+use std::sync::{Mutex, MutexGuard};
+use crate::{rcl_bindings::*, RclrsError};
 
 
 /// The cancel request handle
@@ -9,7 +9,9 @@ pub struct CancelRequestHandle {
 
 impl CancelRequestHandle {
     /// Creates a new cancel request handle
-    pub fn new(cancel_request: rcl_action_cancel_request_t) -> Self {
+    pub fn new() -> Self {
+        // SAFETY: Getting a zero-initialized value is always safe.
+        let cancel_request = unsafe { rcl_action_get_zero_initialized_cancel_request() };
         Self {
             rcl_action_cancel_request_mtx: Mutex::new(cancel_request),
         }
@@ -28,13 +30,8 @@ pub struct CancelResponseHandle {
 impl CancelResponseHandle {
     /// Creates a new cancel response handle
     pub fn new() -> Self {
+        // SAFETY: Getting a zero-initialized value is always safe.
         let rcl_action_cancel_response = unsafe { rcl_action_get_zero_initialized_cancel_response() };
-        // unsafe { 
-        //     rcl_action_cancel_response_init(
-        //         rcl_action_cancel_response, 
-        //         rcutils_get_default_allocator(),
-        //     ).ok()?; 
-        // }
         Self {
             rcl_action_cancel_response_mtx: Mutex::new(rcl_action_cancel_response),
         }
@@ -48,6 +45,7 @@ impl CancelResponseHandle {
 
 impl Drop for CancelResponseHandle {
     fn drop(&mut self) {
+        // SAFETY: No preconditions for this function
         unsafe {
             rcl_action_cancel_response_fini(&mut *self.rcl_action_cancel_response_mtx.get_mut().unwrap());
         }
