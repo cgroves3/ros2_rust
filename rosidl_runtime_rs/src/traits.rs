@@ -236,9 +236,6 @@ pub trait Action: 'static {
     /// The get result service associated with this action.
     type GetResult: GetResultService;
 
-    /// The feedback message associated with this action.
-    type CancelGoal: Service;
-
     /// Get a pointer to the correct `rosidl_action_type_support_t` structure.
     fn get_type_support() -> *const std::os::raw::c_void;
 }

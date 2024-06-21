@@ -1,3 +1,4 @@
+use futures::lock;
 use rosidl_runtime_rs::{
     Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
 };
@@ -287,27 +288,27 @@ where
     /// Takes a cancel request
     pub fn take_cancel_request(
         &self,
-    ) -> Result<(<T::CancelGoal as Service>::Request, rmw_request_id_t), RclrsError> {
+    ) -> Result<(crate::vendor::action_msgs::srv::CancelGoal_Request, rmw_request_id_t), RclrsError> {
         let mut request_id_out = rmw_request_id_t {
             writer_guid: [0; 16],
             sequence_number: 0,
         };
 
-        type RmwMsg<T> =
-            <<<T as Action>::CancelGoal as Service>::Request as rosidl_runtime_rs::Message>::RmwMsg;
+        type RmwMsg =
+            <crate::vendor::action_msgs::srv::CancelGoal_Request as rosidl_runtime_rs::Message>::RmwMsg;
         
-        let mut request_out = RmwMsg::<T>::default();
+        let mut request_out = RmwMsg::default();
         let handle = &*self.handle.lock();
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
                 &mut request_id_out,
-                &mut request_out as *mut RmwMsg<T> as *mut _,
+                &mut request_out as *mut RmwMsg as *mut _,
             )
             .ok()?
         }
         Ok((
-            <T::CancelGoal as Service>::Request::from_rmw_message(request_out),
+            crate::vendor::action_msgs::srv::CancelGoal_Request::from_rmw_message(request_out),
             request_id_out,
         ))
     }
@@ -450,11 +451,8 @@ where
             rcl_action_process_cancel_request(handle, request_handle, response_handle as *mut _)
         }
         .ok()?;
-        // let response_mtx = Arc::new(Mutex::new(CancelResponseHandle::new()));
-        // {
-        //     let mut response = response_mtx.lock().unwrap();
-        //     response.return_code = response_handle.msg.return_code;
-        // }
+        // The response code should have been written to, so there is no need to copy it into the CancelResponseHandle
+    
         let goals = unsafe {
             std::slice::from_raw_parts(
                 response_handle.msg.goals_canceling.data,
@@ -462,50 +460,45 @@ where
             )
         };
 
+        let response_rs = crate::vendor::action_msgs::srv::CancelGoal_Response::default();
         for i in 0..goals.len() {
             let goal_info = &goals[i];
             let mut uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
             uuid.0.copy_from_slice(&goal_info.goal_id.uuid);
             let cb_response_code = self.call_handle_cancel_callback(uuid);
             if matches!(cb_response_code, CancelResponse::Accept) {
-                let mut goal_info = GoalInfo::new();
-                let mut rs_goal_info = goal_info.lock();
-                rs_goal_info
+                let mut goal_info_rs = crate::vendor::action_msgs::msg::GoalInfo::default();
+                goal_info_rs
                     .goal_id
                     .uuid
                     .clone_from_slice(&goal_info.goal_id.uuid);
-                rs_goal_info.stamp.sec = goal_info.stamp.sec;
-                rs_goal_info.stamp.nanosec = goal_info.stamp.nanosec;
-                {
-                    let mut response = cancel_response_handle.lock();
-                    response.goals_canceling.push(rs_goal_info);
-                }
+                goal_info_rs.stamp.sec = goal_info.stamp.sec;
+                goal_info_rs.stamp.nanosec = goal_info.stamp.nanosec;
+                response_rs.goals_canceling.push(goal_info_rs);
             }
         }
 
         // If the user rejects all individual requests to cancel goals,
         // then we consider the top-level cancel request as rejected.
-        {
-            let mut response = cancel_response_handle.lock().unwrap();
-            if goals.len() >= 1 && 0 == response.goals_canceling.len() {
-                response.return_code = CancelResponse::Reject as i8;
-            }
+        if goals.len() >= 1 && 0 == response_rs.goals_canceling.len() {
+            response_rs.return_code = CancelResponse::Reject as i8;
+        }
 
-            // Probably overkill
-            if !response.goals_canceling.is_empty() {
-                // at least one goal state changed, publish a new status message
-                self.publish_status()?;
-            }
+        // Probably overkill
+        if !response_rs.goals_canceling.is_empty() {
+            // at least one goal state changed, publish a new status message
+            self.publish_status()?;
         }
 
         {
-            let mut response = &mut *cancel_response_handle.lock().unwrap();
+            type ResponseRmwMsg = <crate::vendor::action_msgs::srv::CancelGoal_Response as Message>::RmwMsg;
+            let mut rmw_response = ResponseRmwMsg::from_rmw_message(response_rs.into_cow());
             unsafe {
                 // SAFETY: The response type is guaranteed to match the service type by the type system.
                 rcl_action_send_cancel_response(
                     handle,
                     &mut req_id,
-                    response as *mut _,
+                    rmw_response.as_ref() as *mut ResponseRmwMsg as *mut _,
                 )
             }
         }
