@@ -7,6 +7,20 @@ pub struct GoalStatus {
 }
 
 impl GoalStatus {
+    /// Creates a new goal status handle
+    pub fn new(rcl_action_goal_status: rcl_action_goal_status_t) -> Self {
+        Self {
+            rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status))
+        }
+    }
+
+    /// Locks and unwraps the goal status handle
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_t> {
+        self.rcl_action_goal_status_mtx.lock().unwrap()
+    }
+}
+
+impl GoalStatus {
     /// Indicates status has not been properly set.
     pub const STATUS_UNKNOWN: i8 = 0;
     /// The goal has been accepted and is awaiting execution.
@@ -25,27 +39,28 @@ impl GoalStatus {
 }
 
 /// Handle the goal status array
-pub struct GoalStatusArray {
-    rcl_action_goal_status_mtx: Arc<Mutex<rcl_action_goal_status_array_t>>
+pub struct GoalStatusArrayHandle {
+    rcl_action_goal_status_array_mtx: Arc<Mutex<rcl_action_goal_status_array_t>>
 }
 
-impl GoalStatusArray {
+impl GoalStatusArrayHandle {
+    /// Creates a new goal status array handle
     pub fn new(rcl_action_goal_status_array: rcl_action_goal_status_array_t) -> Self {
         Self {
-            rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status_array))
+            rcl_action_goal_status_array_mtx: Arc::new(Mutex::new(rcl_action_goal_status_array))
         }
     }
 
     /// Locks and unwraps the cancel response handle
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_array_t> {
-        self.rcl_action_goal_status_mtx.lock().unwrap()
+        self.rcl_action_goal_status_array_mtx.lock().unwrap()
     }
 }
 
-impl Drop for GoalStatusArray {
+impl Drop for GoalStatusArrayHandle {
     fn drop(&mut self) {
         unsafe { 
-            rcl_action_goal_status_array_fini(&mut *self.rcl_action_goal_status_mtx.get_mut().unwrap()); 
+            rcl_action_goal_status_array_fini(&mut *self.rcl_action_goal_status_array_mtx.get_mut().unwrap()); 
         }
     }
 }

@@ -491,8 +491,7 @@ where
         }
 
         {
-            type ResponseRmwMsg = <crate::vendor::action_msgs::srv::CancelGoal_Response as Message>::RmwMsg;
-            let mut rmw_response = ResponseRmwMsg::from_rmw_message(response_rs.into_cow());
+            let mut rmw_response = crate::vendor::action_msgs::srv::CancelGoal_Response::into_rmw_message(response_rs.into_cow());
             unsafe {
                 // SAFETY: The response type is guaranteed to match the service type by the type system.
                 rcl_action_send_cancel_response(
@@ -590,45 +589,46 @@ where
     /// Publish the status of all goal handles
     pub fn publish_status(&self) -> Result<(), RclrsError> {
         let mut num_goals: usize = 0;
-        let goal_handles = std::ptr::null_mut();
+        let mut goal_handles = std::ptr::null_mut();
         let handle = &*self.handle.lock();
+        // Here goal_handles: *mut *mut *mut rcl_action_goal_handle_t
         unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, &mut num_goals) }.ok()?;
         let mut rcl_goal_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
-        let mut goal_status_array = GoalStatusArray::new(rcl_goal_status_array);
-        goal_status_array.status_list.reserve(num_goals);
-        let goal_status_array_handle = goal_status_array.lock();
-        unsafe { rcl_action_get_goal_status_array(handle, &mut rcl_goal_status_array) }.ok()?;
+        let mut goal_status_array_c = GoalStatusArrayHandle::new(rcl_goal_status_array);
+        let mut goal_status_array_handle = goal_status_array_c.lock();
+        unsafe { rcl_action_get_goal_status_array(handle, &mut goal_status_array_handle) }.ok()?;
         let status_array_slice = unsafe {
             std::slice::from_raw_parts(
-                rcl_goal_status_array.msg.status_list.data,
-                rcl_goal_status_array.msg.status_list.size,
+                goal_status_array_handle.msg.status_list.data,
+                goal_status_array_handle.msg.status_list.size,
             )
         };
-        for i in 0..status_array_slice.len() {
-            let status_msg = &status_array_slice[i];
 
-            let mut goal_status = GoalStatus::default();
-            goal_status.status = status_msg.status;
-            goal_status.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time {
-                sec: status_msg.goal_info.stamp.sec,
-                nanosec: status_msg.goal_info.stamp.nanosec,
+        let goal_status_array_rs = crate::vendor::action_msgs::msg::GoalStatusArray::default();
+        goal_status_array_rs.status_list.reserve(num_goals);
+        for i in 0..status_array_slice.len() {
+            let c_status_msg = &status_array_slice[i];
+
+            let goal_status_rs = crate::vendor::action_msgs::msg::GoalStatus::default();
+            goal_status_rs.status = c_status_msg.status;
+            goal_status_rs.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time {
+                sec: c_status_msg.goal_info.stamp.sec,
+                nanosec: c_status_msg.goal_info.stamp.nanosec,
             };
-            goal_status
+            goal_status_rs
                 .goal_info
                 .goal_id
                 .uuid
-                .copy_from_slice(&status_msg.goal_info.goal_id.uuid);
-            goal_status_array.status_list.push(goal_status);
+                .copy_from_slice(&c_status_msg.goal_info.goal_id.uuid);
+            goal_status_array_rs.status_list.push(goal_status_rs);
         }
-        let goal_status_array_rmw_msg =
-            <GoalStatusArray as rosidl_runtime_rs::Message>::into_rmw_message(
-                goal_status_array.into_cow(),
-            );
+        let goal_status_array_rmw_msg = crate::vendor::action_msgs::msg::GoalStatusArray::into_rmw_message(
+                goal_status_array_rs.into_cow()
+        );
         unsafe {
             rcl_action_publish_status(
                 handle,
-                goal_status_array_rmw_msg.as_ref() as *const <GoalStatusArray as Message>::RmwMsg
-                    as *mut _,
+                goal_status_array_rmw_msg.as_ref() as *const <crate::vendor::action_msgs::msg::GoalStatusArray as Message>::RmwMsg
             )
         }
         .ok()?;
