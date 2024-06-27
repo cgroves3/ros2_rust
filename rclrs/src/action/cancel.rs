@@ -1,5 +1,5 @@
 use std::sync::{Mutex, MutexGuard};
-use crate::{rcl_bindings::*, RclrsError};
+use crate::rcl_bindings::*;
 
 
 /// The cancel request handle

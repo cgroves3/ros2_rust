@@ -1,6 +1,5 @@
-use futures::lock;
 use rosidl_runtime_rs::{
-    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, Service, SetResult, Status
+    Accepted, Action, GetResultService, HasGoal, HasGoalId, Message, SendGoalService, SetResult, Status
 };
 
 use std::collections::HashMap;

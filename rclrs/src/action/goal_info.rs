@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 use crate::rcl_bindings::*;
 
 /// A handle for the goal info
