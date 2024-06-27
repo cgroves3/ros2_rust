@@ -460,7 +460,7 @@ where
             )
         };
 
-        let response_rs = crate::vendor::action_msgs::srv::CancelGoal_Response::default();
+        let mut response_rs = crate::vendor::action_msgs::srv::CancelGoal_Response::default();
         for i in 0..goals.len() {
             let goal_info = &goals[i];
             let mut uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
@@ -491,13 +491,14 @@ where
         }
 
         {
-            let mut rmw_response = crate::vendor::action_msgs::srv::CancelGoal_Response::into_rmw_message(response_rs.into_cow());
+            type CancelGoalResponse = crate::vendor::action_msgs::srv::CancelGoal_Response;
+            let rmw_response = CancelGoalResponse::into_rmw_message(response_rs.into_cow());
             unsafe {
                 // SAFETY: The response type is guaranteed to match the service type by the type system.
                 rcl_action_send_cancel_response(
                     handle,
                     &mut req_id,
-                    rmw_response.as_ref() as *mut ResponseRmwMsg as *mut _,
+                    rmw_response.as_ref() as *const <CancelGoalResponse as Message>::RmwMsg as *mut _,
                 )
             }
         }
@@ -589,14 +590,14 @@ where
     /// Publish the status of all goal handles
     pub fn publish_status(&self) -> Result<(), RclrsError> {
         let mut num_goals: usize = 0;
-        let mut goal_handles = std::ptr::null_mut();
+        let goal_handles = std::ptr::null_mut();
         let handle = &*self.handle.lock();
         // Here goal_handles: *mut *mut *mut rcl_action_goal_handle_t
         unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, &mut num_goals) }.ok()?;
-        let mut rcl_goal_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
-        let mut goal_status_array_c = GoalStatusArrayHandle::new(rcl_goal_status_array);
-        let mut goal_status_array_handle = goal_status_array_c.lock();
-        unsafe { rcl_action_get_goal_status_array(handle, &mut goal_status_array_handle) }.ok()?;
+        let rcl_goal_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
+        let goal_status_array_c = GoalStatusArrayHandle::new(rcl_goal_status_array);
+        let goal_status_array_handle = &mut *goal_status_array_c.lock();
+        unsafe { rcl_action_get_goal_status_array(handle, goal_status_array_handle) }.ok()?;
         let status_array_slice = unsafe {
             std::slice::from_raw_parts(
                 goal_status_array_handle.msg.status_list.data,
@@ -604,12 +605,12 @@ where
             )
         };
 
-        let goal_status_array_rs = crate::vendor::action_msgs::msg::GoalStatusArray::default();
+        let mut goal_status_array_rs = crate::vendor::action_msgs::msg::GoalStatusArray::default();
         goal_status_array_rs.status_list.reserve(num_goals);
         for i in 0..status_array_slice.len() {
             let c_status_msg = &status_array_slice[i];
 
-            let goal_status_rs = crate::vendor::action_msgs::msg::GoalStatus::default();
+            let mut goal_status_rs = crate::vendor::action_msgs::msg::GoalStatus::default();
             goal_status_rs.status = c_status_msg.status;
             goal_status_rs.goal_info.stamp = crate::vendor::builtin_interfaces::msg::Time {
                 sec: c_status_msg.goal_info.stamp.sec,
@@ -628,7 +629,7 @@ where
         unsafe {
             rcl_action_publish_status(
                 handle,
-                goal_status_array_rmw_msg.as_ref() as *const <crate::vendor::action_msgs::msg::GoalStatusArray as Message>::RmwMsg
+                goal_status_array_rmw_msg.as_ref() as *const <crate::vendor::action_msgs::msg::GoalStatusArray as Message>::RmwMsg as *mut _
             )
         }
         .ok()?;

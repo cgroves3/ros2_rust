@@ -81,7 +81,8 @@ where
     /// Gets the current status of the goal as an i8, representing the GoalStatus
     pub(crate) fn get_status(&self) -> Result<i8, RclrsError> {
         let goal_handle = self.handle.lock();
-        let status = &mut GoalStatus::STATUS_UNKNOWN;
+        let mut unknown = GoalStatus::STATUS_UNKNOWN;
+        let status = &mut unknown;
         unsafe { rcl_action_goal_handle_get_status(*goal_handle, &mut *status) }.ok()?;
         Ok(*status)
     }

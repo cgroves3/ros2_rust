@@ -3,20 +3,20 @@ use crate::rcl_bindings::*;
 
 /// Handle the goal status
 pub struct GoalStatus {
-    rcl_action_goal_status_mtx: Arc<Mutex<rcl_action_goal_status_t>>
+    _rcl_action_goal_status_mtx: Arc<Mutex<rcl_action_goal_status_t>>
 }
 
 impl GoalStatus {
     /// Creates a new goal status handle
     pub fn new(rcl_action_goal_status: rcl_action_goal_status_t) -> Self {
         Self {
-            rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status))
+            _rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status))
         }
     }
 
     /// Locks and unwraps the goal status handle
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_t> {
-        self.rcl_action_goal_status_mtx.lock().unwrap()
+        self._rcl_action_goal_status_mtx.lock().unwrap()
     }
 }
 
@@ -40,14 +40,14 @@ impl GoalStatus {
 
 /// Handle the goal status array
 pub struct GoalStatusArrayHandle {
-    rcl_action_goal_status_array_mtx: Arc<Mutex<rcl_action_goal_status_array_t>>
+    rcl_action_goal_status_array_mtx: Mutex<rcl_action_goal_status_array_t>
 }
 
 impl GoalStatusArrayHandle {
     /// Creates a new goal status array handle
     pub fn new(rcl_action_goal_status_array: rcl_action_goal_status_array_t) -> Self {
         Self {
-            rcl_action_goal_status_array_mtx: Arc::new(Mutex::new(rcl_action_goal_status_array))
+            rcl_action_goal_status_array_mtx: Mutex::new(rcl_action_goal_status_array)
         }
     }
 
@@ -55,6 +55,11 @@ impl GoalStatusArrayHandle {
     pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_array_t> {
         self.rcl_action_goal_status_array_mtx.lock().unwrap()
     }
+
+    // /// Locks and unwraps the cancel response handle
+    // pub(crate) fn get_mut(&self) -> &mut rcl_action_goal_status_array_t {
+    //     self.rcl_action_goal_status_array_mtx.get_mut().unwrap()
+    // }
 }
 
 impl Drop for GoalStatusArrayHandle {

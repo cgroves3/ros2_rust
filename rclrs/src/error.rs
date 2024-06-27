@@ -329,14 +329,23 @@ impl Display for RclReturnCode {
 #[repr(i32)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum RclActionReturnCode {
+    /// The action name was invalid
     ActionNameInvalid = 2000,
+    /// The action goal was accepted
     ActionGoalAccepted = 2100,
+    /// The action goal was rejected
     ActionGoalRejected = 2101,
+    /// The action client was invalid
     ActionClientInvalid = 2102,
+    /// The action client take failed
     ActionClientTakeFailed = 2103,
+    /// The action server was invalid
     ActionServerInvalid = 2200,
+    /// The action server take was invalid 
     ActionServerTakeFailed = 2201,
+    /// The action goal handle was invalid
     ActionGoalHandleInvalid = 2300,
+    /// The action goal event was invalid
     ActionGoalEventInvalid = 2301
 }
 
