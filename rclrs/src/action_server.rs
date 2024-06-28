@@ -22,8 +22,6 @@ unsafe impl Send for rcl_action_goal_handle_t {}
 
 unsafe impl Sync for rcl_action_goal_handle_t {}
 
-use std::marker::PhantomData;
-
 mod goal_info;
 mod goal_status;
 mod cancel;
@@ -59,29 +57,6 @@ pub enum CancelResponse {
     Reject = 1,
     /// The accept cancel response state
     Accept = 2,
-}
-
-/// The struct representing the ROS Action Client
-pub struct ActionClient<T>
-where
-    T: rosidl_runtime_rs::Action,
-{
-    _marker: PhantomData<T>,
-}
-
-impl<T> ActionClient<T>
-where
-    T: rosidl_runtime_rs::Action,
-{
-    /// Creates a new action client.
-    pub(crate) fn new(rcl_node_mtx: Arc<Mutex<rcl_node_t>>, topic: &str) -> Result<Self, RclrsError>
-    where
-        T: rosidl_runtime_rs::Action,
-    {
-        Ok(Self {
-            _marker: Default::default(),
-        })
-    }
 }
 
 /// Internal struct used by action servers.
@@ -134,13 +109,13 @@ where
     T: rosidl_runtime_rs::Action,
 {
     pub(crate) goal_handles_mtx:
-        Arc<Mutex<HashMap<crate::action::GoalUUID, Arc<Mutex<ServerGoalHandle<T>>>>>>,
+        Arc<Mutex<HashMap<crate::action_server::GoalUUID, Arc<Mutex<ServerGoalHandle<T>>>>>>,
     pub(crate) goal_results: Arc<
-        Mutex<HashMap<crate::action::GoalUUID, <T::GetResult as GetResultService>::Response>>,
+        Mutex<HashMap<crate::action_server::GoalUUID, <T::GetResult as GetResultService>::Response>>,
     >,
-    pub(crate) result_requests: Arc<Mutex<HashMap<crate::action::GoalUUID, Vec<rmw_request_id_t>>>>,
+    pub(crate) result_requests: Arc<Mutex<HashMap<crate::action_server::GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
-    handle_goal_cb: fn(&crate::action::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
+    handle_goal_cb: fn(&crate::action_server::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
     handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     goal_request_ready: Arc<AtomicBool>,
@@ -159,7 +134,7 @@ where
         name: &str,
         clock: Clock,
         qos: QoSProfile,
-        handle_goal_cb: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_goal_cb: fn(&crate::action_server::GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
         handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     ) -> Result<Self, RclrsError>
@@ -677,6 +652,7 @@ where
         Ok(())
     }
 
+    /// Calls the user-defined handle cancel callback
     pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
         let goal_handles = self.goal_handles_mtx.lock().unwrap();
         let goal_handle_option = goal_handles.get(&goal_uuid);

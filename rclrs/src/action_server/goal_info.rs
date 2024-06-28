@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 use crate::rcl_bindings::*;
 
 /// A handle for the goal info
@@ -14,10 +14,5 @@ impl GoalInfo {
             _rcl_action_goal_info_mtx: Mutex::new(goal_info)
         }
     }
-
-    // /// Locks and unwraps the goal info
-    // pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_info_t> {
-    //     self.rcl_action_goal_info_mtx.lock().unwrap()
-    // }
 }
 

@@ -13,11 +13,6 @@ impl GoalStatus {
             _rcl_action_goal_status_mtx: Arc::new(Mutex::new(rcl_action_goal_status))
         }
     }
-
-    /// Locks and unwraps the goal status handle
-    pub(crate) fn lock(&self) -> MutexGuard<rcl_action_goal_status_t> {
-        self._rcl_action_goal_status_mtx.lock().unwrap()
-    }
 }
 
 impl GoalStatus {
