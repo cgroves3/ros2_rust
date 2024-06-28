@@ -58,6 +58,10 @@ impl SingleThreadedExecutor {
             for ready_service in ready_entities.services {
                 ready_service.execute()?;
             }
+
+            for ready_server in ready_entities.servers {
+                ready_server.execute()?;
+            }
         }
 
         Ok(())

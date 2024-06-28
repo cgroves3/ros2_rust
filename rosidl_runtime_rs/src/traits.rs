@@ -128,7 +128,6 @@ pub trait RmwMessage: Clone + Debug + Default + Send + Sync + Message {
 /// User code can still create messages explicitly, which will not call `init()`, but this is not a
 ///  problem, since nothing is allocated this way.
 /// The `Drop` impl for any sequence or string will call `fini()`.
-
 pub trait Message: Clone + Debug + Default + 'static + Send + Sync {
     /// The corresponding RMW-native message type.
     type RmwMsg: RmwMessage;
@@ -161,16 +160,82 @@ pub trait Service: 'static {
     fn get_type_support() -> *const std::os::raw::c_void;
 }
 
+/// Trait for having a goal id
+pub trait HasGoalId {
+    /// Method to get the goal id.
+    fn get_goal_id(&self) -> [u8; 16];
+}
+
+pub type Goal<A> = <A as Action>::Goal;
+
+/// Trait for having a goal id
+pub trait HasGoal {
+    /// Method to get the goal id.
+    fn get_goal<A: Action>(&self) -> Goal<A>;
+}
+
+/// Trait for setting a GoalStatus
+pub trait Status {
+    /// Method to set the goal status
+    fn set_status(&mut self, goal_status: i8) -> ();
+}
+
+/// Trait for setting an Action Result
+pub trait SetResult {
+    /// Method to set the result
+    fn set_result<A: Action>(&mut self, result: <A as Action>::Result) -> ();
+}
+
+/// Trait for setting and getting an accepted state
+pub trait Accepted {
+    /// Gets the accepted value
+    fn accepted(&self) -> bool;
+    /// Sets the accepted value
+    fn set_accepted(&mut self, accepted: bool);
+}
+
+/// Trait for Action's SendGoalService.
+///
+/// User code never needs to call this trait's method, much less implement this trait.
+pub trait SendGoalService : Service {
+     /// The request message associated with this service.
+    type Request: Message + HasGoalId + HasGoal;
+
+    /// The response message associated with this service.
+    type Response: Message + Accepted;
+}
+
+/// Trait for Action's GetResultService.
+///
+/// User code never needs to call this trait's method, much less implement this trait.
+pub trait GetResultService : Service {
+     /// The request message associated with this service.
+    type Request: Message + HasGoalId + HasGoal;
+
+    /// The response message associated with this service.
+    type Response: Message + Status + SetResult;
+}
+
+
 /// Trait for actions.
 ///
 /// User code never needs to call this trait's method, much less implement this trait.
 pub trait Action: 'static {
-    /// The goal message associated with this service.
+    /// The goal message associated with this action.
     type Goal: Message;
 
-    /// The result message associated with this service.
+    /// The result message associated with this action.
     type Result: Message;
 
-    /// The feedback message associated with this service.
+    /// The feedback message associated with this action.
     type Feedback: Message;
+
+    /// The send goal service associated with this action.
+    type SendGoal: SendGoalService;
+
+    /// The get result service associated with this action.
+    type GetResult: GetResultService;
+
+    /// Get a pointer to the correct `rosidl_action_type_support_t` structure.
+    fn get_type_support() -> *const std::os::raw::c_void;
 }

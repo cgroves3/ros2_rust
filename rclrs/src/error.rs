@@ -30,6 +30,13 @@ pub enum RclrsError {
     },
     /// It was attempted to add a waitable to a wait set twice.
     AlreadyAddedToWaitSet,
+    /// An action error originating in the `rcl` layer.
+    RclActionError {
+        /// The error code.
+        code: RclActionReturnCode,
+        /// The error message set in the `rcl` layer or below.
+        msg: Option<RclErrorMsg>,
+    },
 }
 
 impl Display for RclrsError {
@@ -46,6 +53,7 @@ impl Display for RclrsError {
                     "Could not add entity to wait set because it was already added to a wait set"
                 )
             }
+            RclrsError::RclActionError { code, .. } => write!(f, "{}", code),
         }
     }
 }
@@ -77,6 +85,7 @@ impl Error for RclrsError {
             RclrsError::RclError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::UnknownRclError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::StringContainsNul { err, .. } => Some(err).map(|e| e as &dyn Error),
+            RclrsError::RclActionError { msg, .. } => msg.as_ref().map(|e| e as &dyn Error),
             RclrsError::AlreadyAddedToWaitSet => None,
         }
     }
@@ -312,6 +321,73 @@ impl Display for RclReturnCode {
     }
 }
 
+/// Return codes of `rcl` functions.
+///
+/// This type corresponds to `rcl_ret_t`.
+/// Most of these return codes should never occur in an `rclrs` application,
+/// since they are returned when `rcl` functions are used wrongly..
+#[repr(i32)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum RclActionReturnCode {
+    /// The action name was invalid
+    ActionNameInvalid = 2000,
+    /// The action goal was accepted
+    ActionGoalAccepted = 2100,
+    /// The action goal was rejected
+    ActionGoalRejected = 2101,
+    /// The action client was invalid
+    ActionClientInvalid = 2102,
+    /// The action client take failed
+    ActionClientTakeFailed = 2103,
+    /// The action server was invalid
+    ActionServerInvalid = 2200,
+    /// The action server take was invalid 
+    ActionServerTakeFailed = 2201,
+    /// The action goal handle was invalid
+    ActionGoalHandleInvalid = 2300,
+    /// The action goal event was invalid
+    ActionGoalEventInvalid = 2301
+}
+
+impl TryFrom<i32> for RclActionReturnCode {
+    type Error = i32;
+
+    fn try_from(value: i32) -> Result<Self, i32> {
+        let code = match value {
+            x if x == Self::ActionNameInvalid as i32 => Self::ActionNameInvalid,
+            x if x == Self::ActionGoalAccepted as i32 => Self::ActionGoalAccepted,
+            x if x == Self::ActionGoalRejected as i32 => Self::ActionGoalRejected,
+            x if x == Self::ActionClientInvalid as i32 => Self::ActionClientInvalid,
+            x if x == Self::ActionClientTakeFailed as i32 => Self::ActionClientTakeFailed,
+            x if x == Self::ActionServerInvalid as i32 => Self::ActionServerInvalid,
+            x if x == Self::ActionServerTakeFailed as i32 => Self::ActionServerTakeFailed,
+            x if x == Self::ActionGoalHandleInvalid as i32 => Self::ActionGoalHandleInvalid,
+            x if x == Self::ActionGoalEventInvalid as i32 => Self::ActionGoalEventInvalid,
+            other => {
+                return Err(other);
+            }
+        };
+        Ok(code)
+    }
+}
+
+impl Display for RclActionReturnCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::ActionNameInvalid => "Action name was invalid (RCL_RET_ACTION_NAME_INVALID).",
+            Self::ActionGoalAccepted => "Action goal accepted (RCL_RET_ACTION_GOAL_ACCEPTED).",
+            Self::ActionGoalRejected => "Action goal rejected (RCL_RET_ACTION_GOAL_REJECTED).",
+            Self::ActionClientInvalid => "Invalid `rcl_action_client_t` given (RCL_RET_ACTION_CLIENT_INVALID).",
+            Self::ActionClientTakeFailed => "Failed to take a response from the client (RCL_RET_ACTION_CLIENT_TAKE_FAILED).",
+            Self::ActionServerInvalid => "Invalid `rcl_action_server_t` given (RCL_RET_ACTION_SERVER_INVALID).",
+            Self::ActionServerTakeFailed => "Failed to take a request from the server (RCL_RET_ACTION_SERVER_TAKE_FAILED).",
+            Self::ActionGoalHandleInvalid => "Invalid `rcl_action_goal_handle_t` given (RCL_RET_ACTION_GOAL_HANDLE_INVALID).",
+            Self::ActionGoalEventInvalid => "Invalid `rcl_action_goal_event_t` given (RCL_RET_ACTION_GOAL_EVENT_INVALID).",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 impl Error for RclReturnCode {}
 
 pub(crate) fn to_rclrs_result(ret: i32) -> Result<(), RclrsError> {
@@ -337,7 +413,11 @@ pub(crate) fn to_rclrs_result(ret: i32) -> Result<(), RclrsError> {
     // Finally, try to parse it into a return code.
     Err(match RclReturnCode::try_from(ret) {
         Ok(code) => RclrsError::RclError { code, msg },
-        Err(code) => RclrsError::UnknownRclError { code, msg },
+        Err(_code) =>
+            match RclActionReturnCode::try_from(ret) {
+                Ok(code) => RclrsError::RclActionError { code, msg },
+                Err(code) => RclrsError::UnknownRclError { code, msg },
+            }
     })
 }
 

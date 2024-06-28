@@ -1,6 +1,6 @@
 use crate::rcl_bindings::*;
 use crate::{error::ToResult, time::Time, to_rclrs_result};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Enum to describe clock type. Redefined for readability and to eliminate the uninitialized case
 /// from the `rcl_clock_type_t` enum in the binding.
@@ -101,6 +101,10 @@ impl Clock {
             nsec: time_point,
             clock: Arc::downgrade(&self.rcl_clock),
         }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<rcl_clock_t> {
+        self.rcl_clock.lock().unwrap()
     }
 
     /// Helper function to privately initialize a default clock, with the same behavior as

@@ -38,6 +38,17 @@ TEMPLATE(
     constant_value_to_rs=constant_value_to_rs)
 }@
 
+@{
+TEMPLATE(
+    'action_srv.rs.em',
+    package_name=package_name, interface_path=interface_path,
+    srv_specs=action_srv_specs,
+    get_rs_name=get_rs_name, get_rmw_rs_type=get_rmw_rs_type,
+    pre_field_serde=pre_field_serde,
+    get_idiomatic_rs_type=get_idiomatic_rs_type,
+    constant_value_to_rs=constant_value_to_rs)
+}@
+
 @[for subfolder, action_spec in action_specs]
 
 @{
@@ -51,6 +62,15 @@ type_name = action_spec.namespaced_type.name
     type Goal = crate::@(subfolder)::rmw::@(type_name)_Goal;
     type Result = crate::@(subfolder)::rmw::@(type_name)_Result;
     type Feedback = crate::@(subfolder)::rmw::@(type_name)_Feedback;
+    type FeedbackMessage = crate::@(subfolder)::rmw::@(type_name)_FeedbackMessage;
+
+    type SendGoal = crate::@(subfolder)::rmw::@(type_name)_SendGoal;
+    type GetResult = crate::@(subfolder)::rmw::@(type_name)_GetResult;
+
+    /// The generic service to cancel a goal.
+    using CancelGoalService = action_msgs::srv::CancelGoal;
+    /// The generic message for the status of a goal.
+    using GoalStatusMessage = action_msgs::msg::GoalStatusArray;
   }
 
 @[end for]

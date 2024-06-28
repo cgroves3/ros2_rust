@@ -1,5 +1,6 @@
 mod builder;
 mod graph;
+
 use std::cmp::PartialEq;
 use std::ffi::CStr;
 use std::fmt;
@@ -13,10 +14,10 @@ pub use self::builder::*;
 pub use self::graph::*;
 use crate::rcl_bindings::*;
 use crate::{
-    ActionClient, ActionServer, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
+    ActionClient, ActionServer, ActionServerBase, CancelResponse, Client, ClientBase, Clock, Context, GoalResponse,
     GoalUUID, GuardCondition, ParameterBuilder, ParameterInterface, ParameterVariant, Parameters,
-    Publisher, QoSProfile, RclrsError, ServerGoalHandle, Service, ServiceBase, Subscription,
-    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult,
+    Publisher, QoSProfile, RclrsError, Service, ServiceBase, ServerGoalHandle, Subscription,
+    SubscriptionBase, SubscriptionCallback, TimeSource, ToResult
 };
 
 impl Drop for rcl_node_t {
@@ -72,6 +73,7 @@ pub struct Node {
     pub(crate) guard_conditions_mtx: Mutex<Vec<Weak<GuardCondition>>>,
     pub(crate) services_mtx: Mutex<Vec<Weak<dyn ServiceBase>>>,
     pub(crate) subscriptions_mtx: Mutex<Vec<Weak<dyn SubscriptionBase>>>,
+    pub(crate) servers_mtx: Mutex<Vec<Weak<dyn ActionServerBase>>>,
     time_source: TimeSource,
     parameter: ParameterInterface,
 }
@@ -222,20 +224,26 @@ impl Node {
     // TODO: make action server's lifetime depend on node's lifetime
     pub fn create_action_server<T>(
         &mut self,
-        topic: &str,
-        handle_goal: fn(&crate::action::GoalUUID, Arc<T::Goal>) -> GoalResponse,
-        handle_cancel: fn(Arc<ServerGoalHandle<T>>) -> CancelResponse,
-        handle_accepted: fn(Arc<ServerGoalHandle<T>>),
+        name: &str,
+        qos: QoSProfile,
+        handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_cancel: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
+        handle_accepted: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
     {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),
-            topic,
+            name,
+            self.get_clock(),
+            qos,
+            handle_goal,
+            handle_cancel,
+            handle_accepted
         )?);
-        // self.servers
-        //     .push(Arc::downgrade(&server) as Weak<dyn ClientBase>);
+        { self.servers_mtx.lock().unwrap() }
+            .push(Arc::downgrade(&action_server) as Weak<dyn ActionServerBase>);
         Ok(action_server)
     }
 
@@ -372,6 +380,13 @@ impl Node {
 
     pub(crate) fn live_services(&self) -> Vec<Arc<dyn ServiceBase>> {
         { self.services_mtx.lock().unwrap() }
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    }
+
+    pub(crate) fn live_servers(&self) -> Vec<Arc<dyn ActionServerBase>> {
+        { self.servers_mtx.lock().unwrap() }
             .iter()
             .filter_map(Weak::upgrade)
             .collect()
