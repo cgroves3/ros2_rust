@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard};
 
+use crate::action::GoalUUID;
+use crate::action::types::*;
 use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
 use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
@@ -21,25 +23,6 @@ unsafe impl Send for rcl_action_server_t {}
 unsafe impl Send for rcl_action_goal_handle_t {}
 
 unsafe impl Sync for rcl_action_goal_handle_t {}
-
-mod goal_info;
-mod goal_status;
-mod cancel;
-pub use goal_info::*;
-pub use goal_status::*;
-pub use cancel::*;
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-
-/// The Goal UUID
-pub struct GoalUUID([u8; RCL_ACTION_UUID_SIZE]);
-
-impl GoalUUID {
-    /// Creates a new goal uuid
-    pub fn new(uuid: [u8; RCL_ACTION_UUID_SIZE]) -> Self {
-        Self(uuid)
-    }
-}
 
 /// The goal response states
 pub enum GoalResponse {
@@ -109,19 +92,24 @@ where
     T: rosidl_runtime_rs::Action,
 {
     pub(crate) goal_handles_mtx:
-        Arc<Mutex<HashMap<crate::action_server::GoalUUID, Arc<Mutex<ServerGoalHandle<T>>>>>>,
+        Arc<Mutex<HashMap<GoalUUID, Arc<Mutex<ServerGoalHandle<T>>>>>>,
     pub(crate) goal_results: Arc<
-        Mutex<HashMap<crate::action_server::GoalUUID, <T::GetResult as GetResultService>::Response>>,
+        Mutex<HashMap<GoalUUID, <T::GetResult as GetResultService>::Response>>,
     >,
-    pub(crate) result_requests: Arc<Mutex<HashMap<crate::action_server::GoalUUID, Vec<rmw_request_id_t>>>>,
+    pub(crate) result_requests: Arc<Mutex<HashMap<GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) handle: Arc<ActionServerHandle>,
-    handle_goal_cb: fn(&crate::action_server::GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
+    handle_goal_cb: fn(&GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
     handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
     goal_expired: Arc<AtomicBool>,
+    num_subscriptions: usize,
+    num_guard_conditions: usize,
+    num_timers: usize,
+    num_clients: usize,
+    num_services: usize
 }
 
 impl<T> ActionServer<T>
@@ -134,7 +122,7 @@ where
         name: &str,
         clock: Clock,
         qos: QoSProfile,
-        handle_goal_cb: fn(&crate::action_server::GoalUUID, Arc<T::Goal>) -> GoalResponse,
+        handle_goal_cb: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
         handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
     ) -> Result<Self, RclrsError>
@@ -160,8 +148,8 @@ where
         let server_clock = &mut *clock.lock();
         unsafe {
             // SAFETY: The rcl_action_server is zero-initialized as expected by this function.
-            // The rcl_node is kept alive because it is co-owned by the subscription.
-            // The topic name and the options are copied by this function, so they can be dropped
+            // The rcl_node is kept alive because it is co-owned by the action server.
+            // The action name and the options are copied by this function, so they can be dropped
             // afterwards.
             rcl_action_server_init(
                 &mut rcl_action_server,
@@ -172,6 +160,23 @@ where
                 &action_server_options,
             )
             .ok()?;
+        }
+
+        let mut num_subscriptions = 0;
+        let mut num_guard_conditions = 0;
+        let mut num_timers = 0;
+        let mut num_clients = 0;
+        let mut num_services = 0;
+
+        unsafe {
+            rcl_action_client_wait_set_get_num_entities(
+                &rcl_action_server,
+                &mut num_subscriptions,
+                &mut num_guard_conditions,
+                &mut num_timers,
+                &mut num_clients,
+                &mut num_services
+            ).ok()?;
         }
 
         let handle = Arc::new(ActionServerHandle {
@@ -192,6 +197,11 @@ where
             cancel_request_ready: Arc::new(AtomicBool::new(false)),
             result_request_ready: Arc::new(AtomicBool::new(false)),
             goal_expired: Arc::new(AtomicBool::new(false)),
+            num_subscriptions: num_subscriptions,
+            num_guard_conditions: num_guard_conditions,
+            num_timers: num_timers,
+            num_clients: num_clients,
+            num_services: num_services,
         })
     }
 

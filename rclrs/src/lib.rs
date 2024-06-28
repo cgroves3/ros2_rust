@@ -4,8 +4,7 @@
 //! For getting started, see the [README][1].
 //!
 //! [1]: https://github.com/ros2-rust/ros2_rust/blob/main/README.md
-mod action_client;
-mod action_server;
+mod action;
 mod arguments;
 mod client;
 mod clock;
@@ -32,8 +31,7 @@ pub mod dynamic_message;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use action_server::*;
-pub use action_client::*;
+pub use action::*;
 pub use arguments::*;
 pub use client::*;
 pub use clock::*;
