@@ -86,6 +86,9 @@ impl Drop for ActionServerHandle {
     }
 }
 
+type AcceptedCallback<Request, Response> =
+    Box<dyn Fn(&rmw_request_id_t, Request) -> Response + 'static + Send>;
+
 /// The struct representing the ROS Action Server
 pub struct ActionServer<T>
 where
@@ -100,7 +103,8 @@ where
     pub(crate) handle: Arc<ActionServerHandle>,
     handle_goal_cb: fn(&GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
     handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
-    handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
+    // handle_accepted_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>),
+    handle_accepted_cb: Mutex<Box<dyn Fn(ServerGoalHandle<T>) -> ()>>,
     goal_request_ready: Arc<AtomicBool>,
     cancel_request_ready: Arc<AtomicBool>,
     result_request_ready: Arc<AtomicBool>,
