@@ -43,7 +43,6 @@ where
 {
     handle: Arc<ServerGoalHandleHandle>,
     pub(crate) result: <T as Action>::Result,
-    pub(crate) goal: Arc<<T as Action>::Goal>,
     pub(crate) action_server_handle: Arc<ActionServerHandle>,
 }
 
@@ -62,13 +61,11 @@ where
     pub(crate) fn new(
         handle: Arc<ServerGoalHandleHandle>,
         result: <T as Action>::Result,
-        goal: Arc<<T as Action>::Goal>,
         action_server_handle: Arc<ActionServerHandle>,
     ) -> Self {
         Self {
             handle,
             result: result,
-            goal: Arc::clone(&goal),
             action_server_handle: action_server_handle,
         }
     }
