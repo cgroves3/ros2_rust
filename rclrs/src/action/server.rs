@@ -379,8 +379,7 @@ where
                         type Response<T> = <<T as Action>::GetResult as GetResultService>::Response;
                         let mut result_response = Response::<T>::default();
                         result_response.set_status(goal_status);
-                        // TODO: Refactor to move publish_result and associated data structures to ActionServerHandle
-                        // That way the result doesn't need to be set and the server_goal_handle doesn't need to be owned.
+                        // TODO: Refactor so the server_goal_handle doesn't need to be owned.
                         result_response.set_result::<T>(server_goal_handle.result);
                         self.publish_result(&uuid, result_response)?;
                         self.publish_status()?;
