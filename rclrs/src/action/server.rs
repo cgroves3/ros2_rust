@@ -169,7 +169,7 @@ where
         let mut num_services = 0;
 
         unsafe {
-            rcl_action_client_wait_set_get_num_entities(
+            rcl_action_server_wait_set_get_num_entities(
                 &rcl_action_server,
                 &mut num_subscriptions,
                 &mut num_guard_conditions,
