@@ -225,16 +225,18 @@ impl Node {
     ///
     /// [1]: crate::ActionServer
     // TODO: make action server's lifetime depend on node's lifetime
-    pub fn create_action_server<T>(
+    pub fn create_action_server<T, AC>(
         &mut self,
         name: &str,
         qos: QoSProfile,
         handle_goal: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
-        handle_accepted: fn(Arc<Mutex<ServerGoalHandle<T>>>),
+        // handle_accepted: fn(Arc<Mutex<ServerGoalHandle<T>>>),
+        handle_accepted: AC,
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
+        AC: Fn(crate::server_goal_handle::ServerGoalHandle<T>) -> () + std::marker::Send + 'static
     {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),
@@ -243,7 +245,7 @@ impl Node {
             qos,
             handle_goal,
             handle_cancel,
-            handle_accepted
+            Mutex::new(Box::new(handle_accepted))
         )?);
         { self.servers_mtx.lock().unwrap() }
             .push(Arc::downgrade(&action_server) as Weak<dyn ActionServerBase>);
