@@ -236,7 +236,7 @@ impl Node {
     ) -> Result<Arc<ActionServer<T>>, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
-        AC: Fn(crate::server_goal_handle::ServerGoalHandle<T>) -> () + std::marker::Send + 'static
+        AC: Fn(Arc<Mutex<ServerGoalHandle<T>>>) -> () + std::marker::Send + 'static
     {
         let action_server = Arc::new(ActionServer::<T>::new(
             Arc::clone(&self.rcl_node_mtx),

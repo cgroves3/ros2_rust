@@ -6,11 +6,10 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard, Weak};
 
-use crate::action::GoalUUID;
+use crate::action::{GoalUUID, ServerGoalHandle, ServerGoalHandleHandle};
 use crate::action::types::*;
 use crate::error::{RclActionReturnCode, RclrsError, ToResult};
 use crate::qos::QoSProfile;
-use crate::server_goal_handle::{ServerGoalHandle, ServerGoalHandleHandle};
 use crate::Clock;
 use crate::{rcl_bindings::*, MessageCow};
 
@@ -47,8 +46,6 @@ pub enum CancelResponse {
 pub struct ActionServerHandle {
     rcl_action_server_mtx: Mutex<rcl_action_server_t>,
     rcl_node_mtx: Arc<Mutex<rcl_node_t>>,
-    pub(crate) goal_results: HashMap<GoalUUID, <T::GetResult as GetResultService>::Response>,
-    pub(crate) result_requests: HashMap<GoalUUID, Vec<rmw_request_id_t>>,
     pub(crate) in_use_by_wait_set: Arc<AtomicBool>
 }
 
@@ -76,22 +73,15 @@ impl ActionServerHandle {
         Ok(())
     }
 
-    pub fn on_terminal_state(&self, goal_uuid: &GoalUUID, result_response: <T::GetResult as GetResultService>::Response) -> Result<(), RclrsError> {
-        self.publish_result(goal_uuid, result_response)?;
-        self.publish_status()?;
-        self.notify_goal_terminal_state()?;
-        Ok(())
-    } 
-
     /// Publish the status of all goal handles
-    fn publish_status(&self) -> Result<(), RclrsError> {
+    pub fn publish_status(&self) -> Result<(), RclrsError> {
         let mut num_goals: usize = 0;
         let goal_handles = std::ptr::null_mut();
         let handle = &*self.lock();
         // Here goal_handles: *mut *mut *mut rcl_action_goal_handle_t
         unsafe { rcl_action_server_get_goal_handles(handle, goal_handles, &mut num_goals) }.ok()?;
         let rcl_goal_status_array = unsafe { rcl_action_get_zero_initialized_goal_status_array() };
-        let goal_status_array_c = GoalStatusArrayHandle::new(rcl_goal_status_array);
+        let goal_status_array_c = crate::action::types::GoalStatusArrayHandle::new(rcl_goal_status_array);
         let goal_status_array_handle = &mut *goal_status_array_c.lock();
         unsafe { rcl_action_get_goal_status_array(handle, goal_status_array_handle) }.ok()?;
         let status_array_slice = unsafe {
@@ -132,46 +122,6 @@ impl ActionServerHandle {
         Ok(())
     }
 
-    /// Publishes the given result for the given goal uuid
-    fn publish_result<T>(
-        &self,
-        goal_uuid: &GoalUUID,
-        result: <T::GetResult as GetResultService>::Response,
-    ) -> Result<(), RclrsError> 
-    where T: rosidl_runtime_rs::Action {
-        let goal_info = GoalInfoHandle::new();
-        goal_info.lock().goal_id.uuid.copy_from_slice(&goal_uuid.0);
-        let server_handle = &*self.lock();
-        let goal_info_handle = &*goal_info.lock();
-        let goal_exists = unsafe { rcl_action_server_goal_exists(server_handle, goal_info_handle) };
-        if !goal_exists {
-            panic!("Asked to publish a result for a goal that does not exist");
-        }
-        { self.goal_results.lock().unwrap() }.insert(goal_uuid.clone(), result);
-        if let Some(req_ids) = self.result_requests.get_mut(&goal_uuid)
-        {
-            let result_rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(result.into_cow());
-            type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
-            for req_id in req_ids {
-                unsafe {
-                    rcl_action_send_result_response(
-                        server_handle,
-                        req_id as *mut _,
-                        result_rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
-                    )
-                }
-                .ok()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Notifies that a goal handle reached a terminal state
-    fn notify_goal_terminal_state(&self) -> Result<(), RclrsError> {
-        let handle = &*self.lock();
-        unsafe { rcl_action_notify_goal_done(handle) }.ok()?;
-        Ok(())
-    }
 }
 
 impl Drop for ActionServerHandle {
@@ -186,13 +136,15 @@ impl Drop for ActionServerHandle {
 }
 
 type AcceptedCallback<ServerGoalHandle, Unit> =
-    Box<dyn Fn(Arc<Mutex<ServerGoalHandle>>) -> Unit + 'static + Send>;
+    Box<dyn Fn(ServerGoalHandle) -> Unit + 'static + Send>;
 
 /// The struct representing the ROS Action Server
 pub struct ActionServer<T>
 where
     T: rosidl_runtime_rs::Action,
 {
+    pub(crate) goal_results: Arc<Mutex<HashMap<GoalUUID, <T::GetResult as GetResultService>::Response>>>,
+    pub(crate) result_requests: Arc<Mutex<HashMap<GoalUUID, Vec<rmw_request_id_t>>>>,
     pub(crate) goal_handles: Arc<Mutex<HashMap<GoalUUID, Weak<Mutex<ServerGoalHandle<T>>>>>>,
     pub(crate) handle: Arc<Mutex<ActionServerHandle>>,
     handle_goal_cb: fn(&GoalUUID, Arc<<T as Action>::Goal>) -> GoalResponse,
@@ -222,7 +174,7 @@ where
         qos: QoSProfile,
         handle_goal_cb: fn(&GoalUUID, Arc<T::Goal>) -> GoalResponse,
         handle_cancel_cb: fn(Arc<Mutex<ServerGoalHandle<T>>>) -> CancelResponse,
-        handle_accepted_cb: Mutex<AcceptedCallback<ServerGoalHandle<T>, ()>>,
+        handle_accepted_cb: Mutex<AcceptedCallback<Arc<Mutex<ServerGoalHandle<T>>>, ()>>,
     ) -> Result<Self, RclrsError>
     where
         T: rosidl_runtime_rs::Action,
@@ -282,14 +234,14 @@ where
                 ActionServerHandle {
                     rcl_action_server_mtx: Mutex::new(rcl_action_server),
                     rcl_node_mtx,
-                    goal_results: HashMap::new(),
-                    result_requests: HashMap::new(),
                     in_use_by_wait_set: Arc::new(AtomicBool::new(false)),
                 }
             )
         );
 
         Ok(Self {
+            goal_results: Arc::new(Mutex::new(HashMap::new())),
+            result_requests: Arc::new(Mutex::new(HashMap::new())),
             goal_handles: Arc::new(Mutex::new(HashMap::new())),
             handle,
             handle_goal_cb,
@@ -323,7 +275,8 @@ where
         };
         type RmwMsg<T> = <<<T as Action>::SendGoal as SendGoalService>::Request as Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         unsafe {
             rcl_action_take_goal_request(
                 handle,
@@ -356,7 +309,8 @@ where
         //     <<T as rosidl_runtime_rs::Action>::Result as rosidl_runtime_rs::Message>::RmwMsg;
         type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Request as rosidl_runtime_rs::Message>::RmwMsg;
         let mut request_out = RmwMsg::<T>::default();
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         unsafe {
             rcl_action_take_result_request(
                 handle,
@@ -384,7 +338,8 @@ where
             <crate::vendor::action_msgs::srv::CancelGoal_Request as rosidl_runtime_rs::Message>::RmwMsg;
         
         let mut request_out = RmwMsg::default();
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         unsafe {
             rcl_action_take_cancel_request(
                 handle,
@@ -426,7 +381,8 @@ where
         );
         goal_response.set_accepted(goal_accepted);
         let goal_response_rmw = <Response::<T> as Message>::into_rmw_message(goal_response.into_cow());
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         unsafe {
             // SAFETY: The response type is guaranteed to match the service type by the type system.
             rcl_action_send_goal_response(
@@ -458,14 +414,16 @@ where
                 }
                 .ok()?;
             }
-            { self.handle.lock().unwrap() } .publish_status()?;
+            { self.handle.lock().unwrap() }.publish_status()?;
 
             let server_goal_handle_mtx = Arc::new(
                 Mutex::new(
                     ServerGoalHandle::<T>::new(
                         Arc::new(goal_handle_handle),
                         uuid,
-                        self.handle.clone()
+                        self.handle.clone(),
+                        self.goal_results.clone(),
+                        self.result_requests.clone()
                     )
                 )
             );
@@ -487,7 +445,8 @@ where
 
     /// Accepts a new server goal handle 
     pub fn accept_new_goal(&self, goal_info_handle: GoalInfoHandle) -> ServerGoalHandleHandle {
-        let mut_handle = &mut *self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let mut_handle = &mut *(unwrapped_handle.lock());
         let goal_info = &*goal_info_handle.rcl_action_goal_info_mtx.lock().unwrap();
         unsafe {
             let goal_handle_raw_ptr = rcl_action_accept_new_goal(mut_handle, goal_info);
@@ -514,7 +473,8 @@ where
         {cancel_request_handle.lock()}.goal_info.stamp.sec = cancel_request.goal_info.stamp.sec;
         {cancel_request_handle.lock()}.goal_info.stamp.nanosec = cancel_request.goal_info.stamp.nanosec;
         let cancel_response_handle = CancelResponseHandle::new();
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         let request_handle = &*cancel_request_handle.lock();
         let response_handle = &mut *cancel_response_handle.lock();
         unsafe {
@@ -596,7 +556,8 @@ where
         let goal_uuid = GoalUUID::new(result_request.get_goal_id());
         let goal_info_handle = GoalInfoHandle::new();
 
-        let handle = &*self.handle.lock().unwrap().lock();
+        let unwrapped_handle = self.handle.lock().unwrap();
+        let handle = &*(unwrapped_handle.lock());
         let goal_exists = unsafe { rcl_action_server_goal_exists(handle, &*goal_info_handle.lock()) };
         type RmwMsg<T> = <<<T as Action>::GetResult as GetResultService>::Response as Message>::RmwMsg;
         if !goal_exists {
@@ -614,9 +575,10 @@ where
             .ok()?;
         } else {
             // Goal exists, check if a result is already available
-            if let Some(result_response) = { self.handle.lock().unwrap() }.goal_results.remove(&goal_uuid)
+            if let Some(result_response) = { self.goal_results.lock().unwrap() }.remove(&goal_uuid)
             {
-                let rmw_message = <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(result_response.into_cow());
+                let rmw_message = 
+                    <<<T as Action>::GetResult as GetResultService>::Response as Message>::into_rmw_message(result_response.into_cow());
                 unsafe {
                     rcl_action_send_result_response(
                         handle,
@@ -624,10 +586,10 @@ where
                         rmw_message.as_ref() as *const RmwMsg<T> as *mut _,
                     )
                 }
-                .ok()?;
+                .ok()?;        
             } else {
                 if let Some(request_headers) =
-                    { self.handle.lock().unwrap() }.result_requests.get_mut(&goal_uuid)
+                    { self.result_requests.lock().unwrap() }.get_mut(&goal_uuid)
                 {
                     request_headers.push(req_id);
                 }
@@ -641,7 +603,8 @@ where
         let goal_info_handle = GoalInfoHandle::new();
         let mut num_expired: usize = 1;
         while num_expired > 0 {
-            let handle = &*self.handle.lock().unwrap().lock();
+            let unwrapped_handle = self.handle.lock().unwrap();
+            let handle = &*(unwrapped_handle.lock());
             unsafe {
                 rcl_action_expire_goals(handle, &mut *goal_info_handle.lock(), 1, &mut num_expired)
             }
@@ -649,8 +612,8 @@ where
             if num_expired > 0 {
                 let mut goal_uuid = GoalUUID::new([0; RCL_ACTION_UUID_SIZE]);
                 goal_uuid.0.copy_from_slice(&goal_info_handle.lock().goal_id.uuid);
-                { self.handle.lock().unwrap() }.goal_results.remove(&goal_uuid);
-                { self.handle.lock().unwrap() }.result_requests.remove(&goal_uuid);
+                { self.goal_results.lock().unwrap() }.remove(&goal_uuid);
+                { self.result_requests.lock().unwrap() }.remove(&goal_uuid);
                 { self.goal_handles.lock().unwrap() }.remove(&goal_uuid);
             }
         }
@@ -660,10 +623,11 @@ where
     /// Calls the user-defined handle cancel callback
     pub fn call_handle_cancel_callback(&self, goal_uuid: GoalUUID) -> CancelResponse {
         if let Some(goal_handle) = { self.goal_handles.lock().unwrap() }.get(&goal_uuid) {
-            let cancel_cb_response = (self.handle_cancel_cb)(Weak::upgrade(goal_handle));
+            if let Some(goal_handle_arc) = Weak::upgrade(goal_handle) {
+                let cancel_cb_response = (self.handle_cancel_cb)(goal_handle_arc.clone());
                 match cancel_cb_response {
                     CancelResponse::Accept => {
-                        let result = goal_handle.cancel_goal();
+                        let result = { goal_handle_arc.lock().unwrap() }.cancel_goal();
                         if result.is_err() {
                             CancelResponse::Reject
                         } else {
@@ -672,6 +636,9 @@ where
                     }
                     CancelResponse::Reject => CancelResponse::Reject,
                 }
+            } else {
+                CancelResponse::Reject
+            }
         } else {
             CancelResponse::Reject
         }
@@ -725,7 +692,7 @@ where
     T: rosidl_runtime_rs::Action,
 {
     fn handle(&self) -> &ActionServerHandle {
-        &(self.handle.lock().unwrap())
+        &self.handle.lock().unwrap()
     }
 
     fn execute(&self) -> Result<(), RclrsError> {
